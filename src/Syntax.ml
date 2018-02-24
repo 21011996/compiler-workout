@@ -41,7 +41,50 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let numOpToFunc name a b = 
+      let func = match name with
+        | "+" -> ( + )
+        | "-" -> ( - )
+        | "*" -> ( * )
+        | "/" -> (  / )
+        | "%" -> ( mod )
+        | _ -> failwith "Wrong numerical operator"
+      in func a b
+
+    let cmpOpToFunc name a b = 
+      let func = match name with
+        | "<" -> ( < )
+        | ">" -> ( > )
+        | "<=" -> ( <= )
+        | ">=" -> ( >= )
+        | "==" -> ( = )
+        | "!=" -> ( != )
+        | _ -> failwith "Wrong compair operator"
+      in if func a b then 1 else 0
+
+    let logicOpToFunc name a b = 
+      let func = match name with
+        | "&&" -> ( && )
+        | "!!" -> ( || )
+        | _ -> failwith "Wrong logic operator"
+      in 
+        let intToBool a = a != 0
+        in if func (intToBool a) (intToBool b) then 1 else 0
+
+    let opSeparator name a b =
+      let func = match name with
+        | "+" | "-" | "*" | "/" | "%" -> numOpToFunc
+        | "<" | ">" | "<=" | ">=" | "==" | "!=" -> cmpOpToFunc
+        | "&&" | "!!" -> logicOpToFunc
+        | _ -> failwith "Wrong operator"
+      in func name a b
+
+    let eval state expr = 
+      let rec recEval state expr = match expr with
+        | Const value -> value
+        | Var name -> state name
+        | Binop (operator,left,right) -> opSeparator operator (recEval state left) (recEval state right)
+      in recEval state expr   
 
   end
                     
