@@ -29,7 +29,7 @@ type config = int list * Syntax.Stmt.config
 let rec eval (stack, state, input, output) prg = 
   match prg with
     | (cmd::progr) ->
-      match cmd with
+      (match cmd with
         | BINOP name -> 
           let (y, x) = (hd stack, hd (tl stack)) in  
           let expr = Expr.Binop (name, Expr.Const x, Expr.Const y) in 
@@ -39,7 +39,7 @@ let rec eval (stack, state, input, output) prg =
         | READ ->  eval (hd input :: stack, state, tl input, output) progr
         | WRITE ->   eval (tl stack, state, input, output @ [hd stack]) progr
         | LD name ->   eval (state name :: stack, state, input, output) progr
-        | ST name ->   eval (tl stack, Expr.update name (hd stack) state, input, output) progr
+        | ST name ->   eval (tl stack, Expr.update name (hd stack) state, input, output) progr)
     | _ -> (stack, state, input, output)
 
 (* Stack machine compiler
