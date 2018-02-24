@@ -108,6 +108,11 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+
+    let rec eval (state, input, output) statement = match statement with
+        | Read name -> (Expr.update name (hd input) state, tl input, out)
+        | Write expr -> (state, input, output @ [Expr.eval state expr])
+        | Assign (name, expr) ->  (Expr.update name (Expt.eval state expr) state, input, output)
+        | Seq (statement1, statement2) -> eval (eval (state, input, output) statement1) statement2
                                                          
   end
