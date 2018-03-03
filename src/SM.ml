@@ -43,6 +43,14 @@ let rec eval (stack, state, input, output) prg =
         | ST name ->   eval (tl stack, Expr.update name (hd stack) state, input, output) progr)
     | _ -> (stack, state, input, output)
 
+(* Top-level evaluation
+
+     val run : int list -> prg -> int list
+
+   Takes an input stream, a program, and returns an output stream this program calculates
+*)
+let run i p = let (_, (_, _, o)) = eval ([], (Syntax.Expr.empty, i, [])) p in o
+
 (* Stack machine compiler
 
      val compile : Syntax.Stmt.t -> prg
