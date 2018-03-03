@@ -1,7 +1,0 @@
-S src
-S regression
-
-B src
-B regression
-
-PKG GT ostap
