@@ -96,8 +96,26 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
+
+    let make_binop op x y = Binop(op, x, y) 
+    let get_binop ops = List.map (fun op ->  (ostap ($(op)), make_binop op)) ops
+
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      primary: 
+        x:IDENT {Var x} 
+        | x:DECIMAL {Const x} 
+        | -"(" parse -")";
+      parse: !(Ostap.Util.expr
+        (fun x -> x)
+        [|
+          `Lefta, get_binop ["!!"];
+          `Lefta, get_binop ["&&"];
+          `Nona, get_binop [">"; ">="; "<"; "<="; "=="; "!="];
+          `Lefta, get_binop ["+"; "-"];
+          `Lefta, get_binop ["*"; "/"; "%"]
+        |]
+        primary
+      )
     )
 
   end
@@ -131,7 +149,17 @@ module Stmt =
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      primary:
+        -"read" -"(" x:IDENT -")" {Read x}
+        | -"write" -"(" e:!(Expr.parse) -")" {Write e}
+        | x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
+      parse:!(Ostap.Util.expr
+        (fun x -> x)
+        [|
+          `Righta, [ostap (";"), fun x y -> Seq (x, y)]
+        |]
+        primary
+      )
     )
       
   end
