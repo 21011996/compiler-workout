@@ -96,9 +96,8 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
-
-    let make_binop op x y = Binop(op, x, y) 
-    let get_binop ops = List.map (fun op ->  (ostap ($(op)), make_binop op)) ops
+    
+    let get_binop ops = List.map (fun op ->  (ostap ($(op)), fun x y -> Binop(op, x, y))) ops
 
     ostap (
       primary: 
@@ -110,7 +109,7 @@ module Expr =
         [|
           `Lefta, get_binop ["!!"];
           `Lefta, get_binop ["&&"];
-          `Nona, get_binop [">"; ">="; "<"; "<="; "=="; "!="];
+          `Nona, get_binop [">="; ">"; "<="; "<"; "=="; "!="];
           `Lefta, get_binop ["+"; "-"];
           `Lefta, get_binop ["*"; "/"; "%"]
         |]

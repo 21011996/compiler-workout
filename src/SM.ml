@@ -32,15 +32,15 @@ let rec eval config prg =
     match cmd with
       | BINOP name -> 
         let (y, x) = (hd stack, hd (tl stack)) in  
-        let expr = Expr.Binop (name, Expr.Const x, Expr.Const y) in 
-        let value = Expr.eval state expr in
-        (value :: stack, (state, input, output))
+        let value = Expr.opSeparator name x y in
+        (value :: (tl (tl stack)), (state, input, output))
       | CONST value ->  (value :: stack, (state, input, output))
       | READ ->  (hd input :: stack, (state, tl input, output))
       | WRITE ->   (tl stack, (state, input, output @ [hd stack]))
       | LD name ->   (state name :: stack, (state, input, output))
       | ST name ->  (tl stack, (Expr.update name (hd stack) state, input, output))
   in fold_left eval_inner config prg
+
 
 (* Top-level evaluation
 
