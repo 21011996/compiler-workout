@@ -25,28 +25,26 @@ type config = int list * Stmt.config
      val eval : config -> prg -> config
 
    Takes a configuration and a program, and returns a configuration as a result
- *) 
-
-let rec eval config prg = 
-  let rec eval_inner (stack, (state, input, output)) cmd = 
-    match cmd with
-      | BINOP name -> 
-        let (y, x) = (hd stack, hd (tl stack)) in  
-        let value = Expr.opSeparator name x y in
-        (value :: (tl (tl stack)), (state, input, output))
-      | CONST value ->  (value :: stack, (state, input, output))
-      | READ ->  (hd input :: stack, (state, tl input, output))
-      | WRITE ->   (tl stack, (state, input, output @ [hd stack]))
-      | LD name ->   (state name :: stack, (state, input, output))
-      | ST name ->  (tl stack, (Expr.update name (hd stack) state, input, output))
-  in fold_left eval_inner config prg
+ *)                         
+let rec eval ((stack, ((st, i, o) as c)) as conf) = function
+| [] -> conf
+| insn :: prg' ->
+   eval 
+     (match insn with
+      | BINOP op -> let y::x::stack' = stack in (Expr.to_func op x y :: stack', c)
+      | READ     -> let z::i'        = i     in (z::stack, (st, i', o))
+      | WRITE    -> let z::stack'    = stack in (stack', (st, i, o @ [z]))
+      | CONST i  -> (i::stack, c)
+      | LD x     -> (st x :: stack, c)
+      | ST x     -> let z::stack'    = stack in (stack', (Expr.update x z st, i, o))
+     ) prg'
 
 
 (* Top-level evaluation
 
      val run : prg -> int list -> int list
 
-   Takes an input stream, a program, and returns an output stream this program calculates
+   Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
 
@@ -56,15 +54,15 @@ let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
 
    Takes a program in the source language and returns an equivalent program for the
    stack machine
- *)
-
-let rec compileExpr expr = match expr with
-    | Expr.Var name ->  [LD name]
-    | Expr.Const value -> [CONST value]
-    | Expr.Binop (op, a, b) -> compileExpr a @ compileExpr b @ [BINOP op]
-
-let rec compile statement = match statement with 
-    | Stmt.Assign (name, expr) -> compileExpr expr @ [ST name]
-    | Stmt.Read name -> [READ] @ [ST name]
-    | Stmt.Write expr ->  compileExpr expr @ [WRITE]
-    | Stmt.Seq (stmt1, stmt2) ->  compile stmt1 @ compile stmt2
+*)
+let rec compile =
+  let rec expr = function
+  | Expr.Var   x          -> [LD x]
+  | Expr.Const n          -> [CONST n]
+  | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
+  in
+  function
+  | Stmt.Seq (s1, s2)  -> compile s1 @ compile s2
+  | Stmt.Read x        -> [READ; ST x]
+  | Stmt.Write e       -> expr e @ [WRITE]
+  | Stmt.Assign (x, e) -> expr e @ [ST x]

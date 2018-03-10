@@ -44,79 +44,62 @@ module Expr =
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-    *)
-    let numOpToFunc name a b = 
-      let func = match name with
-        | "+" -> ( + )
-        | "-" -> ( - )
-        | "*" -> ( * )
-        | "/" -> (  / )
-        | "%" -> ( mod )
-        | _ -> failwith "Wrong numerical operator"
-      in func a b
-
-    let cmpOpToFunc name a b = 
-      let func = match name with
-        | "<" -> ( < )
-        | ">" -> ( > )
-        | "<=" -> ( <= )
-        | ">=" -> ( >= )
-        | "==" -> ( = )
-        | "!=" -> ( != )
-        | _ -> failwith "Wrong compair operator"
-      in if func a b then 1 else 0
-
-    let logicOpToFunc name a b = 
-      let func = match name with
-        | "&&" -> ( && )
-        | "!!" -> ( || )
-        | _ -> failwith "Wrong logic operator"
-      in 
-        let intToBool a = a != 0
-        in if func (intToBool a) (intToBool b) then 1 else 0
-
-    let opSeparator name a b =
-      let func = match name with
-        | "+" | "-" | "*" | "/" | "%" -> numOpToFunc
-        | "<" | ">" | "<=" | ">=" | "==" | "!=" -> cmpOpToFunc
-        | "&&" | "!!" -> logicOpToFunc
-        | _ -> failwith "Wrong operator"
-      in func name a b
-
-    let eval state expr = 
-      let rec recEval state expr = match expr with
-        | Const value -> value
-        | Var name -> state name
-        | Binop (operator,left,right) -> opSeparator operator (recEval state left) (recEval state right)
-      in recEval state expr   
+     *)                                                       
+    let to_func op =
+      let bti   = function true -> 1 | _ -> 0 in
+      let itb b = b <> 0 in
+      let (|>) f g   = fun x y -> f (g x y) in
+      match op with
+      | "+"  -> (+)
+      | "-"  -> (-)
+      | "*"  -> ( * )
+      | "/"  -> (/)
+      | "%"  -> (mod)
+      | "<"  -> bti |> (< )
+      | "<=" -> bti |> (<=)
+      | ">"  -> bti |> (> )
+      | ">=" -> bti |> (>=)
+      | "==" -> bti |> (= )
+      | "!=" -> bti |> (<>)
+      | "&&" -> fun x y -> bti (itb x && itb y)
+      | "!!" -> fun x y -> bti (itb x || itb y)
+      | _    -> failwith (Printf.sprintf "Unknown binary operator %s" op)    
+    
+    let rec eval st expr =      
+      match expr with
+      | Const n -> n
+      | Var   x -> st x
+      | Binop (op, x, y) -> to_func op (eval st x) (eval st y)
 
     (* Expression parser. You can use the following terminals:
 
          IDENT   --- a non-empty identifier a-zA-Z[a-zA-Z0-9_]* as a string
          DECIMAL --- a decimal constant [0-9]+ as a string
-   
+                                                                                                                  
     *)
-    
-    let get_binop ops = List.map (fun op ->  (ostap ($(op)), fun x y -> Binop(op, x, y))) ops
-
-    ostap (
-      primary: 
-        x:IDENT {Var x} 
-        | x:DECIMAL {Const x} 
-        | -"(" parse -")";
-      parse: !(Ostap.Util.expr
-        (fun x -> x)
-        [|
-          `Lefta, get_binop ["!!"];
-          `Lefta, get_binop ["&&"];
-          `Nona, get_binop [">="; ">"; "<="; "<"; "=="; "!="];
-          `Lefta, get_binop ["+"; "-"];
-          `Lefta, get_binop ["*"; "/"; "%"]
-        |]
-        primary
-      )
+    ostap (                                      
+      parse:
+	  !(Ostap.Util.expr 
+             (fun x -> x)
+	     (Array.map (fun (a, s) -> a, 
+                           List.map  (fun s -> ostap(- $(s)), (fun x y -> Binop (s, x, y))) s
+                        ) 
+              [|                
+		`Lefta, ["!!"];
+		`Lefta, ["&&"];
+		`Nona , ["=="; "!="; "<="; "<"; ">="; ">"];
+		`Lefta, ["+" ; "-"];
+		`Lefta, ["*" ; "/"; "%"];
+              |] 
+	     )
+	     primary);
+      
+      primary:
+        n:DECIMAL {Const n}
+      | x:IDENT   {Var x}
+      | -"(" parse -")"
     )
-
+    
   end
                     
 (* Simple statements: syntax and sematics *)
@@ -135,30 +118,26 @@ module Stmt =
 
     (* Statement evaluator
 
-          val eval : config -> t -> config
+         val eval : config -> t -> config
 
        Takes a configuration and a statement, and returns another configuration
     *)
-
-    let rec eval (state, input, output) statement = match statement with
-        | Read name -> (Expr.update name (hd input) state, tl input, output)
-        | Write expr -> (state, input, output @ [Expr.eval state expr])
-        | Assign (name, expr) ->  (Expr.update name (Expr.eval state expr) state, input, output)
-        | Seq (statement1, statement2) -> eval (eval (state, input, output) statement1) statement2                                                
-
+    let rec eval ((st, i, o) as conf) stmt =
+      match stmt with
+      | Read    x       -> (match i with z::i' -> (Expr.update x z st, i', o) | _ -> failwith "Unexpected end of input")
+      | Write   e       -> (st, i, o @ [Expr.eval st e])
+      | Assign (x, e)   -> (Expr.update x (Expr.eval st e) st, i, o)
+      | Seq    (s1, s2) -> eval (eval conf s1) s2
+                                
     (* Statement parser *)
     ostap (
-      primary:
-        -"read" -"(" x:IDENT -")" {Read x}
-        | -"write" -"(" e:!(Expr.parse) -")" {Write e}
-        | x:IDENT -":=" e:!(Expr.parse) {Assign (x, e)};
-      parse:!(Ostap.Util.expr
-        (fun x -> x)
-        [|
-          `Righta, [ostap (";"), fun x y -> Seq (x, y)]
-        |]
-        primary
-      )
+      parse:
+        s:stmt ";" ss:parse {Seq (s, ss)}
+      | stmt;
+      stmt:
+        "read" "(" x:IDENT ")"          {Read x}
+      | "write" "(" e:!(Expr.parse) ")" {Write e}
+      | x:IDENT ":=" e:!(Expr.parse)    {Assign (x, e)}            
     )
       
   end
