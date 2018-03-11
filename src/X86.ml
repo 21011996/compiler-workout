@@ -81,6 +81,53 @@ open SM
    of x86 instructions
 *)
 (*1:1:13 in lecture*)
+(*ebx for LD, ST, ecx for read, write, eax, edx for binop*)
+let make_pl_sub_mul op x y ret =
+  [Push eax; Push edx;
+  Mov (x, eax); Mov (y, edx); 
+  Binop(op, edx, eax); Mov (eax, ret); 
+  Pop edx; Pop eax]
+
+let make_div_mode op x y ret = 
+  let move_cmd = match op with
+    | "%" -> Mov (edx, ret)
+    | "/" -> Mov (eax, ret)
+    | _ -> failwith "Unsuported dividion op"
+  in [
+    Push (edx); Push (eax);
+    Mov (L 0, edx); Mov (x, eax); Cltd; IDiv y; move_cmd;
+    Pop (eax); Pop (edx) 
+  ]
+
+let make_cmp op x y ret = 
+  let suffix = match op with
+    | "<"  -> "l"
+    | "<=" -> "le"
+    | ">"  -> "g"
+    | ">=" -> "ge"
+    | "==" -> "e"
+    | "!=" -> "ne" 
+    | _ -> failwith "Unexpected cmp op" 
+    in
+  [
+    Push (edx); Push (eax);
+    Mov (y, edx); Binop ("^", eax, eax);
+    Binop("cmp", edx, x); 
+    Set(suffix, "%al"); Mov(eax, ret);
+    Pop (eax); Pop (edx);
+  ]
+
+let make_logic op x y ret = 
+  [
+    Push (edx); Push (eax); Push (edi);
+    Mov (L 0, edx); Mov (L 0, eax); Mov (L 0, edi);
+    Binop("cmp", edi, x); Set("ne", "%al");
+    Binop("cmp", edi, y); Set("ne", "%dl");
+    Binop(op, eax, edx);  Binop("cmp", edi, edx); Mov(edx, ret);
+    Pop (edi); Pop (eax); Pop (edx);
+  ]
+
+
 let rec compile env = function
   | [] -> env, []
   | instr :: code' ->
@@ -91,16 +138,30 @@ let rec compile env = function
           env_new, [Mov (L value, s)]
         | WRITE ->
           let s, env_new = env#pop in
-          env_new, [Push s; Call "Lwrite"; Pop eax]
+          env_new, [Push ecx; Mov (s, ecx); Push ecx; Call "Lwrite"; Pop ecx; Pop ecx]
         | LD name ->
           let s, env_new = (env#global name)#allocate in
-          env_new, [Mov (M ("global_" ^ name), s)]
+          let loc_name = env#loc name in 
+          env_new, [Push eax; Mov (M loc_name, eax); Mov (eax, s); Pop eax]
         | ST name ->
           let s, env_new = (env#global name)#pop in
-          env_new, [Mov (s, M ("global_" ^ name))]
+          let loc_name = env#loc name in 
+          env_new, [Push eax; Mov (s, eax); Mov (eax, M loc_name); Pop eax]
         | READ ->
           let s, env_new = env#allocate in
-          env_new, [Call "Lread"; Mov (eax, s); Pop eax]
+          env_new, [Push ecx; Call "Lread"; Pop ecx; Mov (eax, s)]
+        | BINOP op ->
+          let y, x, new_env = env#pop2 in
+          let ret_val, new_env_2 = new_env#allocate in
+          let asm_list_maker = match op with
+            | "+" | "-" | "*" -> make_pl_sub_mul
+            | "/" | "%" -> make_div_mode
+            | "<" | "<=" | ">" | ">=" | "==" | "!=" -> make_cmp
+            | "&&" | "!!" -> make_logic
+            | _ -> failwith "Not supported binop"
+          in 
+          new_env_2, asm_list_maker op x y ret_val
+
         | _ ->  failwith "Not yet suported"
     in
     let env, asm' = compile env code' in
@@ -124,7 +185,7 @@ class env =
       let x, n =
 	let rec allocate' = function
 	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+1
+	| (S n)::_                      -> S (n+1) , n+2
 	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
 	| _                             -> S 0     , 1
 	in
