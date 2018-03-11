@@ -1,0 +1,7 @@
+S src
+S regression
+
+B src
+B regression
+
+PKG Ostap GT Opstap.Combinators
