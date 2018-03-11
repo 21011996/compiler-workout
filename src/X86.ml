@@ -140,13 +140,19 @@ let rec compile env = function
           let s, env_new = env#pop in
           env_new, [Push ecx; Mov (s, ecx); Push ecx; Call "Lwrite"; Pop ecx; Pop ecx]
         | LD name ->
-          let s, env_new = (env#global name)#allocate in
           let loc_name = env#loc name in 
-          env_new, [Push eax; Mov (M loc_name, eax); Mov (eax, s); Pop eax]
+          let s, env_new = env#allocate in
+          let asm = match s with
+            | S _ -> [Push eax; Mov (M loc_name, eax); Mov (eax, s); Pop eax]
+            | _ -> [Mov (M loc_name, s)]
+          in env_new, asm
         | ST name ->
           let s, env_new = (env#global name)#pop in
-          let loc_name = env#loc name in 
-          env_new, [Push eax; Mov (s, eax); Mov (eax, M loc_name); Pop eax]
+          let loc_name = env_new#loc name in 
+          let asm = match s with
+            | S _ -> [Push eax; Mov (s, eax); Mov (eax, M loc_name); Pop eax]
+            | _ -> [Mov (s, M loc_name)]
+          in env_new, asm
         | READ ->
           let s, env_new = env#allocate in
           env_new, [Push ecx; Call "Lread"; Pop ecx; Mov (eax, s)]
