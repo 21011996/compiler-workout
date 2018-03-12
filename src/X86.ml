@@ -94,9 +94,7 @@ let make_div_mode op x y ret =
     | "/" -> Mov (eax, ret)
     | _ -> failwith "Unsuported dividion op"
   in [
-    Push (edx); Push (eax);
     Mov (L 0, edx); Mov (x, eax); Cltd; IDiv y; move_cmd;
-    Pop (eax); Pop (edx) 
   ]
 
 let make_cmp op x y ret = 
@@ -111,21 +109,21 @@ let make_cmp op x y ret =
     in
   [
     Push (edx); Push (eax);
-    Mov (y, edx); Binop ("^", eax, eax);
-    Binop("cmp", edx, x); 
-    Set(suffix, "%al"); Mov(eax, ret);
+    Mov (x, edx); Mov(y, eax);
+    Binop("cmp", eax, edx); 
+    Mov (L 0, eax); 
+    Set(suffix, "%al");
+    Mov(eax, ret);
     Pop (eax); Pop (edx);
   ]
 
 let make_logic op x y ret = 
-  [
-    Push (edx); Push (eax); Push (edi);
-    Mov (L 0, edx); Mov (L 0, eax); Mov (L 0, edi);
-    Binop("cmp", edi, x); Set("ne", "%al");
-    Binop("cmp", edi, y); Set("ne", "%dl");
-    Binop(op, eax, edx);  Binop("cmp", edi, edx); Mov(edx, ret);
-    Pop (edi); Pop (eax); Pop (edx);
-  ]
+  [Push (edx); Push (eax);
+  Binop ("^", eax, eax); Binop ("^", edx, edx);
+  Binop ("cmp", L 0, x); Set ("nz", "%al");
+  Binop ("cmp", L 0, y); Set ("nz", "%dl");
+  Binop (op, eax, edx); Mov (edx, ret);
+  Pop (eax); Pop (edx)]
 
 
 let rec compile env = function
@@ -138,24 +136,18 @@ let rec compile env = function
           env_new, [Mov (L value, s)]
         | WRITE ->
           let s, env_new = env#pop in
-          env_new, [Push ecx; Mov (s, ecx); Push ecx; Call "Lwrite"; Pop ecx; Pop ecx]
+          env_new, [Push s; Call "Lwrite"; Pop eax]
         | LD name ->
-          let loc_name = env#loc name in 
-          let s, env_new = env#allocate in
-          let asm = match s with
-            | S _ -> [Push eax; Mov (M loc_name, eax); Mov (eax, s); Pop eax]
-            | _ -> [Mov (M loc_name, s)]
-          in env_new, asm
+          let s, env_new = (env#global name)#allocate in
+          let loc_name = env_new#loc name in
+          env_new, [Push edx; Mov (M loc_name, edx); Mov(edx,s); Pop edx]
         | ST name ->
           let s, env_new = (env#global name)#pop in
           let loc_name = env_new#loc name in 
-          let asm = match s with
-            | S _ -> [Push eax; Mov (s, eax); Mov (eax, M loc_name); Pop eax]
-            | _ -> [Mov (s, M loc_name)]
-          in env_new, asm
+          env_new, [Mov (s, M loc_name)]
         | READ ->
           let s, env_new = env#allocate in
-          env_new, [Push ecx; Call "Lread"; Pop ecx; Mov (eax, s)]
+          env_new, [Call "Lread"; Mov (eax, s)]
         | BINOP op ->
           let y, x, new_env = env#pop2 in
           let ret_val, new_env_2 = new_env#allocate in
@@ -167,8 +159,6 @@ let rec compile env = function
             | _ -> failwith "Not supported binop"
           in 
           new_env_2, asm_list_maker op x y ret_val
-
-        | _ ->  failwith "Not yet suported"
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
