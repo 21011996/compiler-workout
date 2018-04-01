@@ -146,11 +146,21 @@ let rec compile env = function
         | LD name ->
           let s, env_new = (env#global name)#allocate in
           let loc_name = env_new#loc name in
-          env_new, [Push edx; Mov (M loc_name, edx); Mov(edx,s); Pop edx]
+          let cmds = 
+            match s with 
+              | S _ | M _ -> [Mov (M loc_name, eax); Mov (eax, s)]
+              | _ ->  [Mov (M loc_name, s)]
+          in
+          env_new, cmds
         | ST name ->
           let s, env_new = (env#global name)#pop in
           let loc_name = env_new#loc name in 
-          env_new, [Mov (s, M loc_name)]
+          let cmds = 
+            match s with 
+              | S _ | M _ -> [Mov (s, eax); Mov (eax, M loc_name)]
+              | _ ->  [Mov (s, M loc_name)]
+          in
+          env_new, cmds
         | READ ->
           let s, env_new = env#allocate in
           env_new, [Call "Lread"; Mov (eax, s)]
@@ -165,6 +175,11 @@ let rec compile env = function
             | _ -> failwith "Not supported binop"
           in 
           new_env_2, asm_list_maker op x y ret_val
+        | LABEL name -> env, [Label name]
+        | JMP name -> env, [Jmp name]
+        | CJMP (cond, name) ->
+          let x, new_env = env#pop in
+          new_env, [Binop ("cmp", L 0, x); CJmp (cond, name)]
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
@@ -185,14 +200,14 @@ class env =
     (* allocates a fresh position on a symbolic stack *)
     method allocate =
       let x, n =
-	let rec allocate' = function
-	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+2
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+	      let rec allocate' = function
+	      | []                            -> ebx     , 0
+	      | (S n)::_                      -> S (n+1) , n+2
+	      | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
         | (M _)::s                      -> allocate' s
-	| _                             -> S 0     , 1
-	in
-	allocate' stack
+	      | _                             -> S 0     , 1
+	      in
+	      allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 

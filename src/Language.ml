@@ -115,7 +115,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* loop with a post-condition       *) | Until of t * Expr.t with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -132,6 +132,15 @@ module Stmt =
       | Write   e       -> (st, i, o @ [Expr.eval st e])
       | Assign (x, e)   -> (Expr.update x (Expr.eval st e) st, i, o)
       | Seq    (s1, s2) -> eval (eval conf s1) s2
+      | Skip -> conf
+      | If (cond, stm1, stm2) -> 
+        if Expr.eval st cond <> 0 then eval conf stm1 else eval conf stm2
+      | While (cond, stm) -> 
+        if Expr.eval st cond <> 0 then eval (eval conf stm) stmt else conf
+      | Until (stm, cond) ->  
+        let (st_new, in_new, out_new) = eval conf stm in
+        let new_conf = (st_new, in_new, out_new) in
+        if Expr.eval st_new cond <> 0 then new_conf else eval new_conf stmt
                                 
     (* Statement parser *)
     ostap (
@@ -139,9 +148,27 @@ module Stmt =
         s:stmt ";" ss:parse {Seq (s, ss)}
       | stmt;
       stmt:
-        "read" "(" x:IDENT ")"          {Read x}
-      | "write" "(" e:!(Expr.parse) ")" {Write e}
-      | x:IDENT ":=" e:!(Expr.parse)    {Assign (x, e)}            
+        %"read" "(" x:IDENT ")"          {Read x}
+      | %"write" "(" e:!(Expr.parse) ")" {Write e}
+      | %"skip" {Skip}
+      | %"if" e:!(Expr.parse)
+          %"then" the:parse
+            elif:(%"elif" !(Expr.parse) %"then" parse)*
+          els:(%"else" parse)?
+        %"fi" {
+          If (e, the,
+              List.fold_right
+                (fun (e, t) elif -> If (e, t, elif)) 
+                elif
+                (match els with None -> Skip | Some s -> s)
+          )
+        }
+      | %"while" e:!(Expr.parse) %"do" s:parse %"od"  {While (e, s)}
+      | %"for" i:parse "," c:!(Expr.parse) "," s:parse %"do" b:parse %"od" {
+          Seq (i, While (c, Seq (b, s)))
+        }
+      | %"repeat" s:parse %"until" e:!(Expr.parse)  {Until (s, e)}
+      | x:IDENT ":=" e:!(Expr.parse)  {Assign (x, e)}            
     )
       
   end

@@ -28,18 +28,30 @@ type config = int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                         
-let rec eval ((stack, ((st, i, o) as c)) as conf) = function
+let rec eval env ((stack, ((st, i, o) as c)) as conf) = function
 | [] -> conf
+| JMP name :: _ -> eval env conf (env#labeled name)
+| CJMP (cond, name) :: prg' -> 
+  (match stack with
+    | (x::new_stack) -> 
+        (match (x, cond) with
+          | (0, "z") -> eval env (new_stack, c) (env#labeled name)
+          | (0, "nz") ->  eval env (new_stack, c) (env#labeled name)
+          | _ -> eval env (new_stack, c) prg'
+        )
+    | _ -> failwith "SM:43 empty stack"
+  )
 | insn :: prg' ->
-   eval 
-     (match insn with
+  let new_config = match insn with
       | BINOP op -> let y::x::stack' = stack in (Expr.to_func op x y :: stack', c)
       | READ     -> let z::i'        = i     in (z::stack, (st, i', o))
       | WRITE    -> let z::stack'    = stack in (stack', (st, i, o @ [z]))
       | CONST i  -> (i::stack, c)
       | LD x     -> (st x :: stack, c)
       | ST x     -> let z::stack'    = stack in (stack', (Expr.update x z st, i, o))
-     ) prg'
+      | LABEL name -> conf
+      | _ -> failwith "SM:54 weird"
+  in eval env new_config prg'
 
 (* Top-level evaluation
 
@@ -64,14 +76,37 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let rec compile =
+let make_label n = "L_" ^ (string_of_int n)
+
+let compile p =
   let rec expr = function
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   in
-  function
-  | Stmt.Seq (s1, s2)  -> compile s1 @ compile s2
-  | Stmt.Read x        -> [READ; ST x]
-  | Stmt.Write e       -> expr e @ [WRITE]
-  | Stmt.Assign (x, e) -> expr e @ [ST x]
+  let rec compile' count = function  
+  | Stmt.Read x ->  (count, [READ; ST x])
+  | Stmt.Write e -> (count, expr e @ [WRITE])
+  | Stmt.Assign (x, e) -> (count, expr e @ [ST x])
+  | Stmt.Skip -> (count, [])
+  | Stmt.Seq (st1, st2) -> 
+    let (c1, prg1) = compile' count st1 in
+    let (c2, prg2) = compile' c1 st2 in
+    (c2, prg1 @ prg2)                                     
+  | Stmt.If (cond, st1, st2) -> 
+    let c1, prg1 = compile' count st1 in
+    let label_then = make_label c1 in
+    let c2, prg2 = compile' (c1+1) st2 in
+    let label_else = make_label c2 in
+    (c2+1, expr cond @ [CJMP ("z", label_then)] @ prg1 @ [JMP label_else; LABEL label_then] @ prg2 @ [LABEL label_else])                        
+  | Stmt.While (cond, st) -> 
+    let label_loop = make_label count in
+    let (c1, prg1) = compile' (count+1) st in
+    let label_check = make_label c1 in
+    (c1+1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
+  | Stmt.Until (st, cond) ->  
+    let label_loop = make_label count in
+    let (c1, prg1) = compile' (count+1) st in
+    (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
+in let (t_count, prg) = compile' 0 p
+in prg
