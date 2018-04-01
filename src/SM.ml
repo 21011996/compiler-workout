@@ -34,10 +34,9 @@ let rec eval env ((stack, ((st, i, o) as c)) as conf) = function
 | CJMP (cond, name) :: prg' -> 
   (match stack with
     | (x::new_stack) -> 
-        (match (x, cond) with
-          | (0, "z") -> eval env (new_stack, c) (env#labeled name)
-          | (0, "nz") ->  eval env (new_stack, c) (env#labeled name)
-          | _ -> eval env (new_stack, c) prg'
+        (if (cond = "z" && x = 0) || (cond = "nz" && x <> 0) 
+          then eval env (new_stack, c) (env#labeled name)
+          else eval env (new_stack, c) prg'
         )
     | _ -> failwith "SM:43 empty stack"
   )
