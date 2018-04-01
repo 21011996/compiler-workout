@@ -11,15 +11,18 @@ open Language
 (* store a variable from the stack *) | ST    of string
 (* a label                         *) | LABEL of string
 (* unconditional jump              *) | JMP   of string                                                                                                                
-(* conditional jump                *) | CJMP  of string * string with show
+(* conditional jump                *) | CJMP  of string * string
+(* begins procedure definition     *) | BEGIN of string list * string list
+(* end procedure definition        *) | END
+(* calls a procedure               *) | CALL  of string with show
                                                    
 (* The type for the stack machine program *)                                                               
 type prg = insn list
 
-(* The type for the stack machine configuration: a stack and a configuration from statement
+(* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
  *)
-type config = int list * Stmt.config
+type config = (prg * State.t) list * int list * Stmt.config
 
 (* Stack machine interpreter
 
@@ -66,11 +69,11 @@ let run p i =
   | _ :: tl         -> make_map m tl
   in
   let m = make_map M.empty p in
-  let (_, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], (Expr.empty, i, [])) p in o
+  let (_, _, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [])) p in o
 
 (* Stack machine compiler
 
-     val compile : Language.Stmt.t -> prg
+     val compile : Language.t -> prg
 
    Takes a program in the source language and returns an equivalent program for the
    stack machine
@@ -103,7 +106,7 @@ let compile p =
     let (c1, prg1) = compile' (count+1) st in
     let label_check = make_label c1 in
     (c1+1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
-  | Stmt.Until (st, cond) ->  
+  | Stmt.Repeat (st, cond) ->  
     let label_loop = make_label count in
     let (c1, prg1) = compile' (count+1) st in
     (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
