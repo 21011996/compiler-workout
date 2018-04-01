@@ -28,7 +28,18 @@ type config = int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                         
-let rec eval env conf prog = failwith "Not yet implemented"
+let rec eval ((stack, ((st, i, o) as c)) as conf) = function
+| [] -> conf
+| insn :: prg' ->
+   eval 
+     (match insn with
+      | BINOP op -> let y::x::stack' = stack in (Expr.to_func op x y :: stack', c)
+      | READ     -> let z::i'        = i     in (z::stack, (st, i', o))
+      | WRITE    -> let z::stack'    = stack in (stack', (st, i, o @ [z]))
+      | CONST i  -> (i::stack, c)
+      | LD x     -> (st x :: stack, c)
+      | ST x     -> let z::stack'    = stack in (stack', (Expr.update x z st, i, o))
+     ) prg'
 
 (* Top-level evaluation
 
@@ -53,7 +64,6 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-<<<<<<< HEAD
 let rec compile =
   let rec expr = function
   | Expr.Var   x          -> [LD x]
@@ -65,6 +75,3 @@ let rec compile =
   | Stmt.Read x        -> [READ; ST x]
   | Stmt.Write e       -> expr e @ [WRITE]
   | Stmt.Assign (x, e) -> expr e @ [ST x]
-=======
-let compile p = failwith "Not yet implemented"
->>>>>>> upstream/hw5
