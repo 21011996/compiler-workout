@@ -4,4 +4,6 @@ S regression
 B src
 B regression
 
-PKG Ostap GT Opstap.Combinators
+PKG Ostap
+PKG GT
+PKG Opstap.Combinators

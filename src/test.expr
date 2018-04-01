@@ -1,1 +1,7 @@
-write (9)
+k := 10;
+res := 1;
+while k > 0 do
+  res := res * 2;
+  k := k - 1
+od;
+write(res)
