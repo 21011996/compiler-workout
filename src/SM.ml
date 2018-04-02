@@ -50,7 +50,7 @@ let rec eval env ((stack, ((st, i, o) as c)) as conf) = function
       | WRITE    -> let z::stack'    = stack in (stack', (st, i, o @ [z]))
       | CONST i  -> (i::stack, c)
       | LD x     -> (st x :: stack, c)
-      | ST x     -> let z::stack'    = stack in (stack', (Expr.update x z st, i, o))
+      | ST x     -> let z::stack'    = stack in (stack', (State.update x z st, i, o))
       | LABEL name -> conf
       | _ -> failwith "SM:54 weird"
   in eval env new_config prg'
