@@ -31,27 +31,35 @@ type config = (prg * State.t) list * int list * Stmt.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)                         
-let rec eval env ((stack, ((st, i, o) as c)) as conf) = function
+let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | [] -> conf
 | JMP name :: _ -> eval env conf (env#labeled name)
 | CJMP (cond, name) :: prg' -> 
   (match stack with
     | (x::new_stack) -> 
         (if (cond = "z" && x = 0) || (cond = "nz" && x <> 0) 
-          then eval env (new_stack, c) (env#labeled name)
-          else eval env (new_stack, c) prg'
+          then eval env (cstack, new_stack, c) (env#labeled name)
+          else eval env (cstack, new_stack, c) prg'
         )
     | _ -> failwith "SM:43 empty stack"
   )
+| CALL name :: prg_next ->  eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
+| END :: _-> let (prg_prev, st_prev)::cstack_new = cstack in
+              eval env (cstack_new, stack, (State.leave st st_prev, i, o)) prg_prev
 | insn :: prg' ->
   let new_config = match insn with
-      | BINOP op -> let y::x::stack' = stack in (Expr.to_func op x y :: stack', c)
-      | READ     -> let z::i'        = i     in (z::stack, (st, i', o))
-      | WRITE    -> let z::stack'    = stack in (stack', (st, i, o @ [z]))
-      | CONST i  -> (i::stack, c)
-      | LD x     -> (st x :: stack, c)
-      | ST x     -> let z::stack'    = stack in (stack', (State.update x z st, i, o))
+      | BINOP op -> let y::x::stack' = stack in (cstack, Expr.to_func op x y :: stack', c)
+      | READ     -> let z::i'        = i     in (cstack, z::stack, (st, i', o))
+      | WRITE    -> let z::stack'    = stack in (cstack, stack', (st, i, o @ [z]))
+      | CONST i  -> (cstack, i::stack, c)
+      | LD x     -> (cstack, State.eval st x :: stack, c)
+      | ST x     -> let z::stack' = stack in (cstack, stack', (State.update x z st, i, o))
       | LABEL name -> conf
+      | BEGIN (p, l) -> let st_enter = State.enter st (p @ l) in
+              let stack_to_st = fun p (st, x::stack_next) ->  (State.update p x st, stack_next) in
+              let (st_enter, _) = List.fold_right stack_to_st
+              p (st_enter, stack) in
+              (cstack, stack, (st_enter, i, o))
       | _ -> failwith "SM:54 weird"
   in eval env new_config prg'
 
@@ -80,35 +88,52 @@ let run p i =
 *)
 let make_label n = "L_" ^ (string_of_int n)
 
-let compile p =
+let compile (defs, p) =
   let rec expr = function
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   in
-  let rec compile' count = function  
+  let rec compile_stm count = function  
   | Stmt.Read x ->  (count, [READ; ST x])
   | Stmt.Write e -> (count, expr e @ [WRITE])
   | Stmt.Assign (x, e) -> (count, expr e @ [ST x])
   | Stmt.Skip -> (count, [])
   | Stmt.Seq (st1, st2) -> 
-    let (c1, prg1) = compile' count st1 in
-    let (c2, prg2) = compile' c1 st2 in
-    (c2, prg1 @ prg2)                                     
+      let (c1, prg1) = compile_stm count st1 in
+      let (c2, prg2) = compile_stm c1 st2 in
+      (c2, prg1 @ prg2)                                     
   | Stmt.If (cond, st1, st2) -> 
-    let c1, prg1 = compile' count st1 in
-    let label_then = make_label c1 in
-    let c2, prg2 = compile' (c1+1) st2 in
-    let label_else = make_label c2 in
-    (c2+1, expr cond @ [CJMP ("z", label_then)] @ prg1 @ [JMP label_else; LABEL label_then] @ prg2 @ [LABEL label_else])                        
+      let c1, prg1 = compile_stm count st1 in
+      let label_then = make_label c1 in
+      let c2, prg2 = compile_stm (c1+1) st2 in
+      let label_else = make_label c2 in
+      (c2+1, expr cond @ [CJMP ("z", label_then)] @ prg1 @ [JMP label_else; LABEL label_then] @ prg2 @ [LABEL label_else])                        
   | Stmt.While (cond, st) -> 
-    let label_loop = make_label count in
-    let (c1, prg1) = compile' (count+1) st in
-    let label_check = make_label c1 in
-    (c1+1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
+      let label_loop = make_label count in
+      let (c1, prg1) = compile_stm (count+1) st in
+      let label_check = make_label c1 in
+      (c1+1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
   | Stmt.Repeat (st, cond) ->  
-    let label_loop = make_label count in
-    let (c1, prg1) = compile' (count+1) st in
-    (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
-in let (t_count, prg) = compile' 0 p
-in prg
+      let label_loop = make_label count in
+      let (c1, prg1) = compile_stm (count+1) st in
+      (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
+  | Stmt.Call (name, args) -> let args_prg = List.concat @@ List.map expr args in
+      (count, args_prg @ [CALL ("L_" ^ name)])
+  in 
+  let compile_def count_r (name, (params, locals, body)) =
+    let (c1, func_prg) = compile_stm count_r body in
+    (c1, [LABEL name; BEGIN (params, locals)] @ func_prg @ [END])
+  in
+  let start_count = 0
+  in
+  let count_start, defs_prg = List.fold_left
+      (fun (counter, prgs)(name, configur) -> 
+          let (count_z, prg_new) = compile_def counter ("L_" ^ name, configur) 
+          in (count_z, prg_new::prgs))
+      (start_count, [])
+      defs
+  in
+  let (_, prg) = compile_stm count_start p in
+  let label_main = "L_main"
+  in ([JMP label_main] @ (List.concat defs_prg) @ [LABEL label_main] @ prg)
