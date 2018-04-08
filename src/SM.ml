@@ -18,11 +18,11 @@ open Language
                                                    
 (* The type for the stack machine program *)                                                               
 type prg = insn list
-
+                            
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
  *)
-type config = (prg * State.t) list * int list * Stmt.config
+type config = (prg * State.t) list * int list * Expr.config
 
 (* Stack machine interpreter
 
@@ -30,7 +30,12 @@ type config = (prg * State.t) list * int list * Stmt.config
 
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
-*)                         
+*)  
+let rec get_args_from_stack pairs args stack =
+  match args, stack with
+    | [], _ -> (List.rev pairs, stack)
+    | var::args_new, valu::stack_new -> get_args_from_stack ((var, valu)::pairs) args_new stack_new
+
 let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | [] -> conf
 | JMP name :: _ -> eval env conf (env#labeled name)
@@ -44,8 +49,10 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
     | _ -> failwith "SM:43 empty stack"
   )
 | CALL name :: prg_next ->  eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
-| END :: _-> let (prg_prev, st_prev)::cstack_new = cstack in
-              eval env (cstack_new, stack, (State.leave st st_prev, i, o)) prg_prev
+| END :: _-> (match cstack with
+              | (prg_prev, st_prev)::cstack_new ->
+                  eval env (cstack_new, stack, (State.leave st st_prev, i, o)) prg_prev
+              | [] -> conf)
 | insn :: prg' ->
   let new_config = match insn with
       | BINOP op -> let y::x::stack' = stack in (cstack, Expr.to_func_renamed op x y :: stack', c)
@@ -55,11 +62,12 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
       | LD x     -> (cstack, State.eval st x :: stack, c)
       | ST x     -> let z::stack' = stack in (cstack, stack', (State.update x z st, i, o))
       | LABEL name -> conf
-      | BEGIN (p, l) -> let st_enter = State.enter st (p @ l) in
-              let stack_to_st = fun p (st, x::stack_next) ->  (State.update p x st, stack_next) in
-              let (st_enter, _) = List.fold_right stack_to_st
-              p (st_enter, stack) in
-              (cstack, stack, (st_enter, i, o))
+      | BEGIN (p, l) -> 
+              let (var_val, stack_new) = get_args_from_stack [] p stack in
+              let st_enter = State.enter st (p @ l) in
+              let var_val_to_st = fun p (var, valu) ->  (State.update var valu p) in
+              let st_enter' = List.fold_left var_val_to_st st_enter var_val in
+              (cstack, stack_new, (st_enter', i, o))
       | _ -> failwith "SM:54 weird"
   in eval env new_config prg'
 
@@ -70,6 +78,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
    Takes a program, an input stream, and returns an output stream this program calculates
 *)
 let run p i =
+  (*print_prg p;*)
   let module M = Map.Make (String) in
   let rec make_map m = function
   | []              -> m
@@ -93,6 +102,9 @@ let compile (defs, p) =
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
+  | Expr.Call (name, args) -> 
+      let args_prg = List.concat @@ List.map expr (List.rev args) in
+      args_prg @ [CALL ("L_" ^ name)]
   in
   let rec compile_stm count = function  
   | Stmt.Read x ->  (count, [READ; ST x])
@@ -118,8 +130,10 @@ let compile (defs, p) =
       let label_loop = make_label count in
       let (c1, prg1) = compile_stm (count+1) st in
       (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
-  | Stmt.Call (name, args) -> let args_prg = List.concat @@ List.map expr args in
+  | Stmt.Call (name, args) -> 
+      let args_prg = List.concat @@ List.map expr args in
       (count, args_prg @ [CALL ("L_" ^ name)])
+  | Stmt.Return stm -> (count, (match stm with Some exp -> expr exp | None -> []) @ [END])
   in 
   let compile_def count_r (name, (params, locals, body)) =
     let (c1, func_prg) = compile_stm count_r body in
