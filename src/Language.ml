@@ -66,7 +66,7 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)                                                       
-    let to_func op =
+    let to_func_renamed op =
       let bti   = function true -> 1 | _ -> 0 in
       let itb b = b <> 0 in
       let (|>) f g   = fun x y -> f (g x y) in
@@ -90,7 +90,7 @@ module Expr =
       match expr with
       | Const n -> n
       | Var   x -> State.eval st x
-      | Binop (op, x, y) -> to_func op (eval st x) (eval st y)
+      | Binop (op, x, y) -> to_func_renamed op (eval st x) (eval st y)
 
 
     (* Expression parser. You can use the following terminals:
