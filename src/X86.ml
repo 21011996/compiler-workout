@@ -93,16 +93,16 @@ open SM
 (*1:1:13 in lecture*)
 (*ebx for LD, ST, ecx for read, write, eax, edx for binop*)
 let make_pl_sub_mul op x y ret =
-  [Push eax; Push edx;
-  Mov (x, eax); Mov (y, edx); 
-  Binop(op, edx, eax); Mov (eax, ret); 
-  Pop edx; Pop eax]
+  [
+  Mov (x, eax);
+  Binop(op, y, eax); Mov (eax, ret); 
+  ]
 
 let make_div_mode op x y ret = 
   let move_cmd = match op with
     | "%" -> Mov (edx, ret)
     | "/" -> Mov (eax, ret)
-    | _ -> failwith "Unsuported dividion op"
+    | _ -> failwith "Unsuported division op"
   in [
     Mov (L 0, edx); Mov (x, eax); Cltd; IDiv y; move_cmd;
   ]
@@ -118,22 +118,20 @@ let make_cmp op x y ret =
     | _ -> failwith "Unexpected cmp op" 
     in
   [
-    Push (edx); Push (eax);
     Mov (x, edx); Mov(y, eax);
     Binop("cmp", eax, edx); 
     Mov (L 0, eax); 
     Set(suffix, "%al");
     Mov(eax, ret);
-    Pop (eax); Pop (edx);
   ]
 
 let make_logic op x y ret = 
-  [Push (edx); Push (eax);
+  [
   Binop ("^", eax, eax); Binop ("^", edx, edx);
   Binop ("cmp", L 0, x); Set ("nz", "%al");
   Binop ("cmp", L 0, y); Set ("nz", "%dl");
   Binop (op, eax, edx); Mov (edx, ret);
-  Pop (eax); Pop (edx)]
+  ]
 
 let rec push_args env z = function
   | 0 ->  env, z
