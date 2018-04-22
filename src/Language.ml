@@ -64,7 +64,10 @@ module Expr =
     type config = State.t * int list * int list * int option
                                                             
     (* Expression evaluator
-          val eval : env -> config -> t -> int * config
+
+          val eval : env -> config -> t -> config
+
+
        Takes an environment, a configuration and an expresion, and returns another configuration. The 
        environment supplies the following method
            method definition : env -> string -> int list -> config -> config
@@ -257,13 +260,8 @@ module Definition =
     (* The type for a definition: name, argument list, local variables, body *)
     type t = string * (string list * string list * Stmt.t)
 
-    ostap (
-      arg  : IDENT;
-      parse: %"fun" name:IDENT "(" args:!(Util.list0 arg) ")"
-         locs:(%"local" !(Util.list arg))?
-        "{" body:!(Stmt.parse) "}" {
-        (name, (args, (match locs with None -> [] | Some l -> l), body))
-      }
+    ostap (     
+      parse: empty {failwith "Not implemented"}
     )
 
   end
