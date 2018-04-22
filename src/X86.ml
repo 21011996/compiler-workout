@@ -75,10 +75,10 @@ let show instr =
   | Pop    s           -> Printf.sprintf "\tpopl\t%s"      (opnd s)
   | Ret                -> "\tret"
   | Call   p           -> Printf.sprintf "\tcall\t%s" p
-  | Label  l           -> Printf.sprintf "%s:\n" l
+  | Label  l           -> Printf.sprintf "%s:" l
   | Jmp    l           -> Printf.sprintf "\tjmp\t%s" l
   | CJmp  (s , l)      -> Printf.sprintf "\tj%s\t%s" s l
-  | Meta   s           -> Printf.sprintf "%s\n" s
+  | Meta   s           -> Printf.sprintf "%s" s
 
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
@@ -135,8 +135,20 @@ let make_logic op x y ret =
   Binop (op, eax, edx); Mov (edx, ret);
   Pop (eax); Pop (edx)]
 
+let rec push_args env z = function
+  | 0 ->  env, z
+  | n ->  let x, new_env = env#pop in
+  push_args new_env ((Push x)::z) (n-1)
 
-let rec compile env = function
+  (*Init from SO, because List.init wasn't present*)
+let init n f =
+  let rec init' i n f =
+    if i >= n then []
+    else (f i) :: (init' (i+1) n f)
+  in init' 0 n f
+
+
+let rec compile env code = match code with
   | [] -> env, []
   | instr :: code' ->
     let env, asm =
@@ -152,8 +164,8 @@ let rec compile env = function
           let loc_name = env_new#loc name in
           let cmds = 
             match s with 
-              | S _ | M _ -> [Mov (M loc_name, eax); Mov (eax, s)]
-              | _ ->  [Mov (M loc_name, s)]
+              | S _ | M _ -> [Mov (loc_name, eax); Mov (eax, s)]
+              | _ ->  [Mov (loc_name, s)]
           in
           env_new, cmds
         | ST name ->
@@ -161,8 +173,8 @@ let rec compile env = function
           let loc_name = env_new#loc name in 
           let cmds = 
             match s with 
-              | S _ | M _ -> [Mov (s, eax); Mov (eax, M loc_name)]
-              | _ ->  [Mov (s, M loc_name)]
+              | S _ | M _ -> [Mov (s, eax); Mov (eax, loc_name)]
+              | _ ->  [Mov (s, loc_name)]
           in
           env_new, cmds
         | READ ->
@@ -184,6 +196,32 @@ let rec compile env = function
         | CJMP (cond, name) ->
           let x, new_env = env#pop in
           new_env, [Binop ("cmp", L 0, x); CJmp (cond, name)]
+        | BEGIN (name, params, locals) ->  
+          let new_env = env#enter name params locals in
+          new_env, [Push ebp; Mov (esp, ebp); Binop ("-", M ("$" ^ new_env#lsize), esp)]
+        | END ->  
+          env, [Label env#epilogue;
+                Mov (ebp, esp);
+                Pop ebp;
+                Ret;
+                Meta (Printf.sprintf "\t.set %s, %d" env#lsize (env#allocated * word_size))
+                ]
+        | RET is_proc ->
+          if is_proc
+          then 
+            let x, env_new = env#pop in
+            env_new, [Mov (x, eax); Jmp env_new#epilogue]
+          else
+            env, [Jmp env#epilogue]
+        | CALL (f, param_count, is_proc) ->
+          let pushed = List.map (fun x -> Push x) env#live_registers in
+          let poped = List.map (fun x -> Pop x) @@ List.rev env#live_registers in
+          let env_pop_func = fun (env, list) _ -> let s, env = env#pop in env, s::list in
+          let env, params = List.fold_left env_pop_func (env, []) (init param_count (fun _ -> ())) in
+          let params_rev = List.rev params in
+          let push_params = List.map (fun x -> Push x) params_rev in
+          let env, get_result = if is_proc then env, [] else (let s, env = env#allocate in env, [Mov (eax, s)]) in
+          env, pushed @ push_params @ [Call f; Binop ("+", L (param_count * word_size), esp)] @ poped @ get_result
     in
     let env, asm' = compile env code' in
     env, asm @ asm'
@@ -192,7 +230,8 @@ let rec compile env = function
 module S = Set.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+
+let make_assoc l = List.combine l (init (List.length l) (fun x -> x))
                      
 class env =
   object (self)
@@ -210,16 +249,16 @@ class env =
         try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
         
     (* allocates a fresh position on a symbolic stack *)
-    method allocate =
+    method allocate =    
       let x, n =
-	      let rec allocate' = function
-	      | []                            -> ebx     , 0
-	      | (S n)::_                      -> S (n+1) , n+2
-	      | (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+	let rec allocate' = function
+	| []                            -> ebx     , 0
+	| (S n)::_                      -> S (n+1) , n+1
+	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
         | (M _)::s                      -> allocate' s
-	      | _                             -> S 0     , 1
-	      in
-	      allocate' stack
+	| _                             -> S 0     , 1
+	in
+	allocate' stack
       in
       x, {< stack_slots = max n stack_slots; stack = x::stack >}
 

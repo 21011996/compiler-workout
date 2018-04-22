@@ -32,10 +32,6 @@ type config = (prg * State.t) list * int list * Expr.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)  
-let rec get_args_from_stack pairs args stack =
-  match args, stack with
-    | [], _ -> (List.rev pairs, stack)
-    | var::args_new, valu::stack_new -> get_args_from_stack ((var, valu)::pairs) args_new stack_new
 
 let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | [] -> conf
@@ -43,14 +39,14 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | CJMP (cond, name) :: prg' -> 
   (match stack with
     | (x::new_stack) -> 
-        (if (cond = "z" && x = 0) || (cond = "nz" && x <> 0) 
+        (if (cond = "z" && x == 0) || (cond = "nz" && x != 0) 
           then eval env (cstack, new_stack, c) (env#labeled name)
           else eval env (cstack, new_stack, c) prg'
         )
     | _ -> failwith "SM:43 empty stack"
   )
-| CALL name :: prg_next ->  eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
-| END :: _-> (match cstack with
+| CALL (name, _, _) :: prg_next ->  eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
+| END :: _ | RET _ :: _-> (match cstack with
               | (prg_prev, st_prev)::cstack_new ->
                   eval env (cstack_new, stack, (State.leave st st_prev, i, o)) prg_prev
               | [] -> conf)
@@ -63,12 +59,10 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
       | LD x     -> (cstack, State.eval st x :: stack, c)
       | ST x     -> let z::stack' = stack in (cstack, stack', (State.update x z st, i, o))
       | LABEL name -> conf
-      | BEGIN (p, l) -> 
-              let (var_val, stack_new) = get_args_from_stack [] p stack in
-              let st_enter = State.enter st (p @ l) in
-              let var_val_to_st = fun p (var, valu) ->  (State.update var valu p) in
-              let st_enter' = List.fold_left var_val_to_st st_enter var_val in
-              (cstack, stack_new, (st_enter', i, o))
+      | BEGIN (_, p, l) -> let enter_st = State.enter st (p @ l) in
+                           let upt_func = fun p (st, x::stack') -> (State.update p x st, stack') in
+                           let (st', stack') = List.fold_right upt_func p (enter_st, stack) in
+                           (cstack, stack', (st', i, o))
       | _ -> failwith "SM:54 weird"
   in eval env new_config prg'
 
@@ -102,9 +96,7 @@ let compile (defs, p) =
   | Expr.Var   x          -> [LD x]
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
-  | Expr.Call (name, args) -> 
-      let args_prg = List.concat @@ List.map expr (List.rev args) in
-      args_prg @ [CALL ("L_" ^ name)]
+  | Expr.Call (f, params) -> List.concat (List.map expr params) @ [CALL (f, List.length params, false)]
   in
   let rec compile_stm count = function  
   | Stmt.Read x ->  (count, [READ; ST x])
@@ -132,22 +124,22 @@ let compile (defs, p) =
       (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
   | Stmt.Call (name, args) -> 
       let args_prg = List.concat @@ List.map expr args in
-      (count, args_prg @ [CALL ("L_" ^ name)])
-  | Stmt.Return stm -> (count, (match stm with Some exp -> expr exp | None -> []) @ [END])
+      (count, args_prg @ [CALL (name, List.length args, true)])
+  | Stmt.Return stm -> (count, (match stm with Some exp -> expr exp @ [RET true] | None -> [RET false]))
   in 
   let compile_def count_r (name, (params, locals, body)) =
     let (c1, func_prg) = compile_stm count_r body in
-    (c1, [LABEL name; BEGIN (params, locals)] @ func_prg @ [END])
+    (c1, [LABEL name; BEGIN (name, params, locals)] @ func_prg @ [END])
   in
   let start_count = 0
   in
   let count_start, defs_prg = List.fold_left
       (fun (counter, prgs)(name, configur) -> 
-          let (count_z, prg_new) = compile_def counter ("L_" ^ name, configur) 
+          let (count_z, prg_new) = compile_def counter (name, configur) 
           in (count_z, prg_new::prgs))
       (start_count, [])
       defs
   in
   let (_, prg) = compile_stm count_start p in
   let label_main = "L_main"
-  in ([JMP label_main] @ (List.concat defs_prg) @ [LABEL label_main] @ prg)
+  in prg @ [END] @ List.concat defs_prg
