@@ -3,27 +3,27 @@ open Language
        
 (* The type for the stack machine instructions *)
 @type insn =
-(* binary operator                 *) | BINOP of string
-(* put a constant on the stack     *) | CONST of int                 
-(* read to stack                   *) | READ
-(* write from stack                *) | WRITE
-(* load a variable to the stack    *) | LD    of string
-(* store a variable from the stack *) | ST    of string
-(* a label                         *) | LABEL of string
-(* unconditional jump              *) | JMP   of string
-(* conditional jump                *) | CJMP  of string * string
-(* begins procedure definition     *) | BEGIN of string * string list * string list
+(* binary operator                 *) | BINOP   of string
+(* put a constant on the stack     *) | CONST   of int
+(* put a string on the stack       *) | STRING  of string                      
+(* load a variable to the stack    *) | LD      of string
+(* store a variable from the stack *) | ST      of string
+(* store in an array               *) | STA     of string * int
+(* a label                         *) | LABEL   of string
+(* unconditional jump              *) | JMP     of string
+(* conditional jump                *) | CJMP    of string * string
+(* begins procedure definition     *) | BEGIN   of string * string list * string list
 (* end procedure definition        *) | END
-(* calls a function/procedure      *) | CALL  of string * int * bool
-(* returns from a function         *) | RET   of bool with show
+(* calls a function/procedure      *) | CALL    of string * int * bool
+(* returns from a function         *) | RET     of bool with show
                                                    
-(* The type for the stack machine program *)                                                               
+(* The type for the stack machine program *)
 type prg = insn list
                             
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
- *)
-type config = (prg * State.t) list * int list * Expr.config
+*)
+type config = (prg * State.t) list * Value.t list * Expr.config
 
 (* Stack machine interpreter
 
@@ -32,6 +32,12 @@ type config = (prg * State.t) list * int list * Expr.config
    Takes an environment, a configuration and a program, and returns a configuration as a result. The
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
 *)  
+let split n l =
+  let rec unzip (taken, rest) = function
+  | 0 -> (List.rev taken, rest)
+  | n -> let h::tl = rest in unzip (h::taken, tl) (n-1)
+  in
+  unzip ([], l) n
 
 let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | [] -> conf
@@ -39,23 +45,26 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
 | CJMP (cond, name) :: prg' -> 
   (match stack with
     | (x::new_stack) -> 
-        (if (cond = "z" && x == 0) || (cond = "nz" && x != 0) 
+        (if (cond = "z" && Value.to_int x == 0) || (cond = "nz" && Value.to_int x != 0) 
           then eval env (cstack, new_stack, c) (env#labeled name)
           else eval env (cstack, new_stack, c) prg'
         )
     | _ -> failwith "SM:43 empty stack"
   )
-| CALL (name, _, _) :: prg_next ->  eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
+| CALL (name, n, p) :: prg_next ->  
+  if env#is_label name
+    then eval env ((prg_next, st)::cstack, stack, c)(env#labeled name)
+    else eval env (env#builtin conf name n p) prg_next
 | END :: _ | RET _ :: _-> (match cstack with
               | (prg_prev, st_prev)::cstack_new ->
                   eval env (cstack_new, stack, (State.leave st st_prev, i, o)) prg_prev
               | [] -> conf)
 | insn :: prg' ->
   let new_config = match insn with
-      | BINOP op -> let y::x::stack' = stack in (cstack, Expr.to_func_renamed op x y :: stack', c)
-      | READ     -> let z::i'        = i     in (cstack, z::stack, (st, i', o))
-      | WRITE    -> let z::stack'    = stack in (cstack, stack', (st, i, o @ [z]))
-      | CONST i  -> (cstack, i::stack, c)
+      | BINOP op -> let y::x::stack' = stack in (cstack, Value.of_int @@ Expr.to_func_renamed op (Value.to_int x) (Value.to_int y) :: stack', c)
+      (*| READ     -> let z::i'        = i     in (cstack, z::stack, (st, i', o))
+      | WRITE    -> let z::stack'    = stack in (cstack, stack', (st, i, o @ [z]))*)
+      | CONST i  -> (cstack, (Value.of_int i)::stack, c)
       | LD x     -> (cstack, State.eval st x :: stack, c)
       | ST x     -> let z::stack' = stack in (cstack, stack', (State.update x z st, i, o))
       | LABEL name -> conf
@@ -63,6 +72,10 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
                            let upt_func = fun p (st, x::stack') -> (State.update p x st, stack') in
                            let (st', stack') = List.fold_right upt_func p (enter_st, stack) in
                            (cstack, stack', (st', i, o))
+      | STRING s -> (cstack, (Value.of_string s)::stack, c)
+      | STA (x, n) -> 
+        let v::is, stack' = split (n+1) stack in
+        (cstack, stack', (Stmt.update st x v @@ List.rev is, i, o))
       | _ -> failwith "SM:54 weird"
   in eval env new_config prg'
 
@@ -80,7 +93,24 @@ let run p i =
   | _ :: tl         -> make_map m tl
   in
   let m = make_map M.empty p in
-  let (_, _, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], [], (State.empty, i, [])) p in o
+  let (_, _, (_, _, o)) =
+    eval
+      (object
+         method is_label l = M.mem l m
+         method labeled l = M.find l m
+         method builtin (cstack, stack, (st, i, o)) f n p =
+           let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
+           let args, stack' = split n stack in
+           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
+           let stack'' = if p then stack' else let Some r = r in r::stack' in
+           Printf.printf "Builtin: %s\n";
+           (cstack, stack'', (st, i, o))
+       end
+      )
+      ([], [], (State.empty, i, []))
+      p
+  in
+  o
 
 (* Stack machine compiler
 
@@ -97,11 +127,16 @@ let compile (defs, p) =
   | Expr.Const n          -> [CONST n]
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   | Expr.Call (f, params) -> List.concat (List.map expr params) @ [CALL (f, List.length params, false)]
+  | Expr.String s -> [STRING s]
+  | Expr.Array xs ->  List.flatten (List.map expr xs) @ [CALL ("$array"), List.length xs, false]
+  | Expr.Elem (a, i) -> expr a @ expr i @ [CALL ("$elem", 2, false)]
+  | Expr.Length ->  expr e @ [CALL ("$length", 1, false)]
   in
   let rec compile_stm count = function  
-  | Stmt.Read x ->  (count, [READ; ST x])
-  | Stmt.Write e -> (count, expr e @ [WRITE])
-  | Stmt.Assign (x, e) -> (count, expr e @ [ST x])
+  (*| Stmt.Read x ->  (count, [READ; ST x])
+  | Stmt.Write e -> (count, expr e @ [WRITE])*)
+  | Stmt.Assign (x, [], e) -> (count, expr e @ [ST x])
+  | Stmt.Assign (x, is, e) -> (count, List.concat (List.map exr is) @ expr e @ [STA (x, List.length is)])
   | Stmt.Skip -> (count, [])
   | Stmt.Seq (st1, st2) -> 
       let (c1, prg1) = compile_stm count st1 in
@@ -112,7 +147,11 @@ let compile (defs, p) =
       let label_then = make_label c1 in
       let c2, prg2 = compile_stm (c1+1) st2 in
       let label_else = make_label c2 in
-      (c2+1, expr cond @ [CJMP ("z", label_then)] @ prg1 @ [JMP label_else; LABEL label_then] @ prg2 @ [LABEL label_else])                        
+      (c2+1, 
+        expr cond @ [CJMP ("z", label_then)] @ 
+          prg1 @ [JMP label_else; LABEL label_then] @ 
+          prg2 @ [LABEL label_else]
+      )                        
   | Stmt.While (cond, st) -> 
       let label_loop = make_label count in
       let (c1, prg1) = compile_stm (count+1) st in
