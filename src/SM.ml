@@ -5,7 +5,8 @@ open Language
 @type insn =
 (* binary operator                 *) | BINOP   of string
 (* put a constant on the stack     *) | CONST   of int
-(* put a string on the stack       *) | STRING  of string                      
+(* put a string on the stack       *) | STRING  of string
+(* create an S-expression          *) | SEXP    of string * int
 (* load a variable to the stack    *) | LD      of string
 (* store a variable from the stack *) | ST      of string
 (* store in an array               *) | STA     of string * int
@@ -15,7 +16,14 @@ open Language
 (* begins procedure definition     *) | BEGIN   of string * string list * string list
 (* end procedure definition        *) | END
 (* calls a function/procedure      *) | CALL    of string * int * bool
-(* returns from a function         *) | RET     of bool with show
+(* returns from a function         *) | RET     of bool
+(* drops the top element off       *) | DROP
+(* duplicates the top element      *) | DUP
+(* swaps two top elements          *) | SWAP
+(* checks the tag of S-expression  *) | TAG     of string
+(* enters a scope                  *) | ENTER   of string list
+(* leaves a scope                  *) | LEAVE
+with show
                                                    
 (* The type for the stack machine program *)
 type prg = insn list
@@ -119,66 +127,36 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let make_label n = "L_" ^ (string_of_int n)
-
-let compile (defs, p) =
-  let rec expr = function
-  | Expr.Var   x          -> [LD x]
-  | Expr.Const n          -> [CONST n]
-  | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
-  | Expr.Call (f, params) -> List.concat (List.map expr params) @ [CALL (f, List.length params, false)]
-  | Expr.String s -> [STRING s]
-  | Expr.Array xs ->  List.flatten (List.map expr xs) @ [CALL ("$array", List.length xs, false)]
-  | Expr.Elem (a, i) -> expr a @ expr i @ [CALL ("$elem", 2, false)]
-  | Expr.Length e ->  expr e @ [CALL ("$length", 1, false)]
-  in
-  let rec compile_stm count = function  
-  (*| Stmt.Read x ->  (count, [READ; ST x])
-  | Stmt.Write e -> (count, expr e @ [WRITE])*)
-  | Stmt.Assign (x, [], e) -> (count, expr e @ [ST x])
-  | Stmt.Assign (x, is, e) -> (count, List.concat (List.map expr is) @ expr e @ [STA (x, List.length is)])
-  | Stmt.Skip -> (count, [])
-  | Stmt.Seq (st1, st2) -> 
-      let (c1, prg1) = compile_stm count st1 in
-      let (c2, prg2) = compile_stm c1 st2 in
-      (c2, prg1 @ prg2)                                     
-  | Stmt.If (cond, st1, st2) -> 
-      let c1, prg1 = compile_stm count st1 in
-      let label_then = make_label c1 in
-      let c2, prg2 = compile_stm (c1+1) st2 in
-      let label_else = make_label c2 in
-      (c2+1, 
-        expr cond @ [CJMP ("z", label_then)] @ 
-          prg1 @ [JMP label_else; LABEL label_then] @ 
-          prg2 @ [LABEL label_else]
-      )                        
-  | Stmt.While (cond, st) -> 
-      let label_loop = make_label count in
-      let (c1, prg1) = compile_stm (count+1) st in
-      let label_check = make_label c1 in
-      (c1+1, [JMP label_check; LABEL label_loop] @ prg1 @ [LABEL label_check] @ expr cond @ [CJMP ("nz", label_loop)])
-  | Stmt.Repeat (st, cond) ->  
-      let label_loop = make_label count in
-      let (c1, prg1) = compile_stm (count+1) st in
-      (c1, [LABEL label_loop] @ prg1 @ expr cond @ [CJMP ("z", label_loop)])
-  | Stmt.Call (name, args) -> 
-      let args_prg = List.concat @@ List.map expr args in
-      (count, args_prg @ [CALL (name, List.length args, true)])
-  | Stmt.Return stm -> (count, (match stm with Some exp -> expr exp @ [RET true] | None -> [RET false]))
-  in 
-  let compile_def count_r (name, (params, locals, body)) =
-    let (c1, func_prg) = compile_stm count_r body in
-    (c1, [LABEL name; BEGIN (name, params, locals)] @ func_prg @ [END])
-  in
-  let start_count = 0
-  in
-  let count_start, defs_prg = List.fold_left
-      (fun (counter, prgs)(name, configur) -> 
-          let (count_z, prg_new) = compile_def counter (name, configur) 
-          in (count_z, prg_new::prgs))
-      (start_count, [])
-      defs
-  in
-  let (_, prg) = compile_stm count_start p in
-  let label_main = "L_main"
-  in prg @ [END] @ List.concat defs_prg
+let compile (defs, p) = 
+  let label s = "L" ^ s in
+  let rec call f args p =
+    let args_code = List.concat @@ List.map expr args in
+    args_code @ [CALL (label f, List.length args, p)]
+  and pattern lfalse _ = failwith "Not implemented"
+  and bindings p = failwith "Not implemented"
+  and expr e = failwith "Not implemented" in
+  let rec compile_stmt l env stmt =  failwith "Not implemented" in
+   let compile_def env (name, (args, locals, stmt)) =
+     let lend, env       = env#get_label in
+     let env, flag, code = compile_stmt lend env stmt in
+     env,
+     [LABEL name; BEGIN (name, args, locals)] @
+     code @
+     (if flag then [LABEL lend] else []) @
+     [END]
+   in
+   let env =
+     object
+       val ls = 0
+       method get_label = (label @@ string_of_int ls), {< ls = ls + 1 >}
+     end
+   in
+   let env, def_code =
+     List.fold_left
+       (fun (env, code) (name, others) -> let env, code' = compile_def env (label name, others) in env, code'::code)
+       (env, [])
+       defs
+   in
+   let lend, env = env#get_label in
+   let _, flag, code = compile_stmt lend env p in
+   (if flag then code @ [LABEL lend] else code) @ [END] @ (List.concat def_code) 

@@ -11,7 +11,7 @@ open Combinators
 module Value =
   struct
 
-    @type t = Int of int | String of string | Array of t list with show
+    @type t = Int of int | String of string | Array of t list | Sexp of string * t list with show
 
     let to_int = function 
     | Int n -> n 
@@ -25,6 +25,7 @@ module Value =
     | Array a -> a
     | _       -> failwith "array value expected"
 
+    let sexp   s vs = Sexp (s, vs)
     let of_int    n = Int    n
     let of_string s = String s
     let of_array  a = Array  a
@@ -41,49 +42,82 @@ module State =
   struct
                                                                 
     (* State: global state, local state, scope variables *)
-    type t = {g : string -> Value.t; l : string -> Value.t; scope : string list}
+    type t =
+    | G of (string -> Value.t)
+    | L of string list * (string -> Value.t) * t
+
+    (* Undefined state *)
+    let undefined x = failwith (Printf.sprintf "Undefined variable: %s" x)
+
+    (* Bind a variable to a value in a state *)
+    let bind x v s = fun y -> if x = y then v else s y 
 
 
     let empty_st x = failwith (Printf.sprintf "Undefined variable: %s" x)  
     (* Empty state *)
-    let empty =
-      let e x = failwith (Printf.sprintf "Undefined variable: %s" x) in
-      {g = e; l = e; scope = []}
+    let empty = G undefined
 
     (* Update: non-destructively "modifies" the state s by binding the variable x 
        to value v and returns the new state w.r.t. a scope
     *)
     let update x v s =
-      let u x v s = fun y -> if x = y then v else s y in
-      if List.mem x s.scope then {s with l = u x v s.l} else {s with g = u x v s.g}
+      let rec inner = function
+      | G s -> G (bind x v s)
+      | L (scope, s, enclosing) ->
+         if List.mem x scope then L (scope, bind x v s, enclosing) else L (scope, s, inner enclosing)
+      in
+      inner s
 
     (* Evals a variable in a state w.r.t. a scope *)
-    let eval s x = (if List.mem x s.scope then s.l else s.g) x
+    let rec eval s x =
+      match s with
+      | G s -> s x
+      | L (scope, s, enclosing) -> if List.mem x scope then s x else eval enclosing x
 
     (* Creates a new scope, based on a given state *)
-    let enter st xs = {empty with g = st.g; scope = xs}
+    let rec enter st xs =
+      match st with
+      | G _         -> L (xs, undefined, st)
+      | L (_, _, e) -> enter e xs
 
     (* Drops a scope *)
-    let leave st st' = {st' with g = st.g}
+    let leave st st' =
+      let rec get = function
+      | G _ as st -> st
+      | L (_, _, e) -> get e
+      in
+      let g = get st in
+      let rec recurse = function
+      | L (scope, s, e) -> L (scope, s, recurse e)
+      | G _             -> g
+      in
+      recurse st'
 
+    (* Push a new local scope *)
+    let push st s xs = L (xs, s, st)
+
+    (* Drop a local scope *)
+    let drop (L (_, _, e)) = e
+                               
   end
 
 (* Builtins *)
 module Builtin =
   struct
-
+      
     let eval (st, i, o, _) args = function
     | "read"     -> (match i with z::i' -> (st, i', o, Some (Value.of_int z)) | _ -> failwith "Unexpected end of input")
     | "write"    -> (st, i, o @ [Value.to_int @@ List.hd args], None)
-    | "$elem"    -> let [b; j] = args in
+    | ".elem"    -> let [b; j] = args in
                     (st, i, o, let i = Value.to_int j in
                                Some (match b with
-                                     | Value.String s -> Value.of_int @@ Char.code s.[i]
-                                     | Value.Array  a -> List.nth a i
+                                     | Value.String   s  -> Value.of_int @@ Char.code s.[i]
+                                     | Value.Array    a  -> List.nth a i
+                                     | Value.Sexp (_, a) -> List.nth a i
                                )
                     )         
-    | "$length"  -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Array a -> List.length a | Value.String s -> String.length s)))
-    | "$array"   -> (st, i, o, Some (Value.of_array args))
+    | ".length"  -> (st, i, o, Some (Value.of_int (match List.hd args with Value.Array a -> List.length a | Value.String s -> String.length s)))
+    | ".array"   -> (st, i, o, Some (Value.of_array args))
     | "isArray"  -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.Array  _ -> 1 | _ -> 0))
     | "isString" -> let [a] = args in (st, i, o, Some (Value.of_int @@ match a with Value.String _ -> 1 | _ -> 0))                     
        
@@ -165,25 +199,20 @@ module Expr =
           (st, i, o, Some (Value.of_int @@ to_func_renamed op (Value.to_int x) (Value.to_int y)))
         | Call (name, args) ->
           let (st, i, o, evaled_args) = eval_list env conf args in
-         env#definition env name evaled_args (st, i, o, None)
+          env#definition env name evaled_args (st, i, o, None)
         | String s -> (st, i, o, Some (Value.of_string s))
         | Array xs -> 
           let (st, i, o, evaled_list) = eval_list env conf xs in
-          (st, i, o, Some (Value.of_array evaled_list))
-        (*| Sexp (t, xs) -> 
-          let (st, i, o, evaled_list) = eval_list env conf xs in
-          (st, i, o, Some (Value.Sexp (t, evaled_list)))*)
+          env#definition env ".array" evaled_list (st, i, o, None)
+        | Sexp (tag, exprs) -> 
+          let (st, i, o, evaled_exprs) = eval_list env conf exprs in
+          (st, i, o, Some (Value.Sexp (tag, evaled_exprs)))
         | Elem (e, idx) -> 
-          let (st, i, o, Some eval_idx) = eval env conf idx in
-          let (st, i, o, Some v) = eval env (st, i, o, None) e in
-          (st, i, o, Some (match v with
-            | Value.Array list -> List.nth list @@ Value.to_int eval_idx
-            | Value.String s -> Value.of_int @@ Char.code @@ String.get s @@ Value.to_int eval_idx))
+          let (st, i, o, args) = eval_list env conf [e; idx] in
+          env#definition env ".elem" args (st, i, o, None)
         | Length e -> 
           let (st, i, o, Some v) = eval env conf e in
-          (st, i, o, Some (match v with
-            | Value.Array list -> Value.of_int @@ List.length list
-            | Value.String s -> Value.of_int @@ String.length s))
+          env#definition env ".length" [v] (st, i, o, None)
       and eval_list env conf xs =
         let vs, (st, i, o, _) =
           List.fold_left
@@ -203,21 +232,20 @@ module Expr =
     *)
     ostap (                                      
       parse:
-	      !(Ostap.Util.expr 
-          (fun x -> x)
-	        (Array.map (fun (a, s) -> a, 
-                        List.map  (fun s -> ostap(- $(s)), (fun x y -> Binop (s, x, y))) s
-    )
-          [|                
-		        `Lefta, ["!!"];
-		        `Lefta, ["&&"];
-		        `Nona , ["=="; "!="; "<="; "<"; ">="; ">"];
-		        `Lefta, ["+" ; "-"];
-		        `Lefta, ["*" ; "/"; "%"];
-          |] 
-	        )
-	        primary);
-    
+	  !(Ostap.Util.expr 
+             (fun x -> x)
+	     (Array.map (fun (a, s) -> a, 
+                           List.map  (fun s -> ostap(- $(s)), (fun x y -> Binop (s, x, y))) s
+                        ) 
+              [|                
+		`Lefta, ["!!"];
+		`Lefta, ["&&"];
+		`Nona , ["=="; "!="; "<="; "<"; ">="; ">"];
+		`Lefta, ["+" ; "-"];
+		`Lefta, ["*" ; "/"; "%"];
+              |] 
+	     )
+	     primary);
       primary: b:base is:(-"[" i:parse -"]" {`Elem i} | "." %"length" {`Len}) *
                            {List.fold_left (fun b -> function `Elem i -> Elem (b, i) | `Len -> Length b) b is};
       base:
@@ -225,6 +253,7 @@ module Expr =
       | s:STRING                                          {String (String.sub s 1 (String.length s - 2))}
       | c:CHAR                                            {Const  (Char.code c)}
       | "[" es:!(Util.list0)[parse] "]"                   {Array es}
+      | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {Sexp (t, match args with None -> [] | Some args -> args)}
       | x:IDENT s:("(" args:!(Util.list0)[parse] ")"      {Call (x, args)} | empty {Var x}) {s}
       | -"(" parse -")"
     )
@@ -236,24 +265,43 @@ module Expr =
 module Stmt =
   struct
 
+    (* Patterns in statements *)
+    module Pattern =
+      struct
+
+        (* The type for patterns *)
+        @type t =
+        (* wildcard "-"     *) | Wildcard
+        (* S-expression     *) | Sexp   of string * t list
+        (* identifier       *) | Ident  of string
+        with show, foldl
+
+        (* Pattern parser *)                                 
+        ostap (
+          parse:
+            %"_" {Wildcard}
+          | "`" t:IDENT ps:(-"(" !(Util.list)[parse] -")")? {Sexp (t, match ps with None -> [] | Some ps -> ps)}
+          | x:IDENT                           {Ident  x}
+        )
+        
+        let vars p =
+          transform(t) (object inherit [string list] @t[foldl] method c_Ident s _ name = name::s end) [] p
+        
+      end
+        
     (* The type for statements *)
-    type t =
+    @type t =
     (* assignment                       *) | Assign of string * Expr.t list * Expr.t
     (* composition                      *) | Seq    of t * t 
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
     (* loop with a post-condition       *) | Repeat of t * Expr.t
+    (* pattern-matching                 *) | Case   of Expr.t * (Pattern.t * t) list
     (* return statement                 *) | Return of Expr.t option
-    (* call a procedure                 *) | Call   of string * Expr.t list
-                                                                    
-    (* The type of configuration: a state, an input stream, an output stream *)
-
-    let rec zip_with = function
-      | x::xs, y::ys -> (x, y) :: (zip_with (xs, ys))
-      | [], [] -> []
-      | _, _ -> failwith "Uneven elem count in zip_with"
-
+    (* call a procedure                 *) | Call   of string * Expr.t list 
+    (* leave a scope                    *) | Leave  with show
+                                                                                   
     (* Statement evaluator
 
          val eval : env -> config -> t -> config
@@ -261,7 +309,6 @@ module Stmt =
        Takes an environment, a configuration and a statement, and returns another configuration. The 
        environment is the same as for expressions
     *)
-
     let update st x v is =
       let rec update a v = function
       | []    -> v           
@@ -277,11 +324,6 @@ module Stmt =
     let rec eval env ((st, i, o, r) as conf) k stmt =
       let seq x = function Skip -> x | y -> Seq (x, y) in
       match stmt with
-      (*| Read    x       -> eval env (match i with z::i' -> (State.update x z st, i', o, r) | _ -> failwith "Unexpected end of input") Skip k
-      | Write   e       -> eval env (
-          let (st, i, o, Some x) = Expr.eval env conf e in 
-          (st, i, o @ [x], r)
-        ) Skip k*)
       | Assign (name, xs, e)   -> 
         let (st, i, o, is) = Expr.eval_list env conf xs in
         let (st, i, o, Some value) = Expr.eval env (st, i, o, None) e in
@@ -305,13 +347,7 @@ module Stmt =
           ) stm
       | Return expr -> (match expr with None -> (st, i, o, None) | Some e ->  Expr.eval env conf e)
       | Call (name, args) -> eval env (Expr.eval env conf (Expr.Call (name, args))) k Skip
-        (*let parms, vars, f_stm = env#definition name in
-        let evaled_args = List.map (Expr.eval st) args in
-        let assign st (var, valu) = State.update var valu st in
-        let start_state = State.enter st (parms @ vars) in
-        let local_state = List.fold_left assign start_state (zip_with (parms,evaled_args)) in
-        let end_state, i_new, o_new = eval env (local_state, i, o) f_stm in
-        (State.leave end_state st, i_new, o_new) *)
+      | Leave ->  eval env (State.drop st, i, o, r) Skip k
          
     (* Statement parser *)
     ostap (
@@ -337,7 +373,8 @@ module Stmt =
 	  Seq (i, While (c, Seq (b, s)))
         }
       | %"repeat" s:parse %"until" e:!(Expr.parse)  {Repeat (s, e)}
-      | %"return" e:!(Expr.parse)?                  {Return e} 
+      | %"return" e:!(Expr.parse)?                  {Return e}
+      | %"case" e:!(Expr.parse) %"of" bs:!(Util.listBy)[ostap ("|")][ostap (!(Pattern.parse) -"->" parse)] %"esac" {Case (e, bs)}
       | x:IDENT 
            s:(is:(-"[" !(Expr.parse) -"]")* ":=" e   :!(Expr.parse) {Assign (x, is, e)}    | 
               "("  args:!(Util.list0)[Expr.parse] ")" {Call   (x, args)}
@@ -374,24 +411,24 @@ type t = Definition.t list * Stmt.t
    Takes a program and its input stream, and returns the output stream
 *)
 let eval (defs, body) i =
-   let module M = Map.Make (String) in
-   let m          = List.fold_left (fun m ((name, _) as def) -> M.add name def m) M.empty defs in  
-   let _, _, o, _ =
-     Stmt.eval
-       (object
-          method definition env f args ((st, i, o, r) as conf) =
-            try
-              let xs, locs, s      =  snd @@ M.find f m in
-              let st'              = List.fold_left (fun st (x, a) -> State.update x a st) (State.enter st (xs @ locs)) (List.combine xs args) in
-              let st'', i', o', r' = Stmt.eval env (st', i, o, r) Stmt.Skip s in
-              (State.leave st'' st, i', o', r')
-            with Not_found -> Builtin.eval conf args f
-        end)
-       (State.empty, i, [], None)
-       Stmt.Skip
-       body
-   in
-   o
+  let module M = Map.Make (String) in
+  let m          = List.fold_left (fun m ((name, _) as def) -> M.add name def m) M.empty defs in  
+  let _, _, o, _ =
+    Stmt.eval
+      (object
+         method definition env f args ((st, i, o, r) as conf) =
+           try
+             let xs, locs, s      =  snd @@ M.find f m in
+             let st'              = List.fold_left (fun st (x, a) -> State.update x a st) (State.enter st (xs @ locs)) (List.combine xs args) in
+             let st'', i', o', r' = Stmt.eval env (st', i, o, r) Stmt.Skip s in
+             (State.leave st'' st, i', o', r')
+           with Not_found -> Builtin.eval conf args f
+       end)
+      (State.empty, i, [], None)
+      Stmt.Skip
+      body
+  in
+  o
 
 (* Top-level parser *)
 let parse = ostap (!(Definition.parse)* !(Stmt.parse))
