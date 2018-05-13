@@ -30,7 +30,9 @@ module Value =
     let of_array  a = Array  a
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = List.init   (List.length a)   (fun j -> if j = i then x else List.nth a j)
+
+    let rec list_init i n f = if i >= n then [] else (f i) :: (list_init (i + 1) n f) 
+    let update_array  a i x = list_init 0 (List.length a)   (fun j -> if j = i then x else List.nth a j)
 
   end
        
@@ -160,17 +162,17 @@ module Expr =
         | Binop (op, x, y) -> 
           let (_, _, _, Some x) as conf_x = eval env conf x in
           let (st, i, o, Some y) = eval env conf_x y in
-          (st, i, o, Some (to_func_renamed op x y))
+          (st, i, o, Some (Value.of_int @@ to_func_renamed op (Value.to_int x) (Value.to_int y)))
         | Call (name, args) -> 
           let (st, i, o, Some evaled_args) = eval_list env conf args in
           env#definition env name args (st, i, o, None)
         | String s -> (st, i, o, Some (Value.of_string s))
         | Array xs -> 
           let (st, i, o, evaled_list) = eval_list env conf xs in
-          env#definition env "$array" evaled_list (st, i, o, None)
-        | Sexp (t, xs) -> 
+          (st, i, o, Some (Value.of_array evaled_list))
+        (*| Sexp (t, xs) -> 
           let (st, i, o, evaled_list) = eval_list env conf xs in
-          (st, i, o, Some (Value.Sexp (t, evaled_list)))
+          (st, i, o, Some (Value.Sexp (t, evaled_list)))*)
         | Elem (b, i) -> 
           let (st, i, o, args) = eval_list env conf [b; i] in
           env#definition env "$elem" args (st, i, o, None)
@@ -218,7 +220,6 @@ module Expr =
       | s:STRING                                          {String (String.sub s 1 (String.length s - 2))}
       | c:CHAR                                            {Const  (Char.code c)}
       | "[" es:!(Util.list0)[parse] "]"                   {Array es}
-      | "`" t:IDENT args:(-"(" !(Util.list)[parse] -")")? {Sexp (t, match args with None -> [] | Some args -> args)}
       | x:IDENT s:("(" args:!(Util.list0)[parse] ")"      {Call (x, args)} | empty {Var x}) {s}
       | -"(" parse -")"
     )
@@ -313,10 +314,10 @@ module Stmt =
         s:stmt ";" ss:parse {Seq (s, ss)}
       | stmt;
       stmt:
-      | %"skip" {Skip}
-      | %"if" e:expr
+        %"skip" {Skip}
+      | %"if" e:!(Expr.parse)
           %"then" the:parse
-          elif:(%"elif" expr %"then" parse)*
+          elif:(%"elif" !(Expr.parse) %"then" parse)*
           els:(%"else" parse)?
         %"fi" {
           If (e, the,
@@ -326,18 +327,14 @@ module Stmt =
                 (match els with None -> Skip | Some s -> s)
           )
         }
-      | %"while" e:expr %"do" s:parse %"od"  {While (e, s)}
-      | %"for" i:parse "," c:expr "," s:parse %"do" b:parse %"od" {
+      | %"while" e:!(Expr.parse) %"do" s:parse %"od"{While (e, s)}
+      | %"for" i:parse "," c:!(Expr.parse) "," s:parse %"do" b:parse %"od" {
           Seq (i, While (c, Seq (b, s)))
         }
-      | %"repeat" s:parse %"until" e:expr  {Repeat (s, e)}
-      | %"return" e:expr? {Return e}
-      | x:IDENT 
-           s:(is:(-"[" expr -"]")* ":=" e   :expr {Assign (x, is, e)}    | 
-              "("  mexprs ")" {Call   (x, args)}
-             ) {s};
-      expr:!(Expr.parse);
-      mexprs: args:!(Util.list0)[Expr.parse]
+      | %"repeat" s:parse %"until" e:!(Expr.parse)  {Repeat (s, e)}
+      | %"return" e:!(Expr.parse)?                  {Return e} 
+      | x:IDENT idx:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse)    {Assign (x, idx, e)}
+      | name:IDENT "(" params:(!(Util.list)[ostap (!(Expr.parse))])? ")" {Call (name, default [] params)}
     )
       
   end
