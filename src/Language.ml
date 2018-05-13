@@ -164,7 +164,7 @@ module Expr =
           let (st, i, o, Some y) = eval env conf_x y in
           (st, i, o, Some (Value.of_int @@ to_func_renamed op (Value.to_int x) (Value.to_int y)))
         | Call (name, args) -> 
-          let (st, i, o, Some evaled_args) = eval_list env conf args in
+          let (st, i, o, evaled_args) = eval_list env conf args in
           env#definition env name args (st, i, o, None)
         | String s -> (st, i, o, Some (Value.of_string s))
         | Array xs -> 
@@ -173,12 +173,17 @@ module Expr =
         (*| Sexp (t, xs) -> 
           let (st, i, o, evaled_list) = eval_list env conf xs in
           (st, i, o, Some (Value.Sexp (t, evaled_list)))*)
-        | Elem (b, i) -> 
-          let (st, i, o, args) = eval_list env conf [b; i] in
-          env#definition env "$elem" args (st, i, o, None)
+        | Elem (e, idx) -> 
+          let (st, i, o, Some eval_idx) = eval env conf idx in
+          let (st, i, o, Some v) = eval env (st, i, o, None) e in
+          (st, i, o, Some (match v with
+            | Value.Array list -> List.nth list @@ Value.to_int eval_idx
+            | Value.String s -> Value.of_int @@ Char.code @@ String.get s @@ Value.to_int eval_idx))
         | Length e -> 
-          let (st, i, o, Some v) = eval_list env conf e in
-          env#definition env "$length" [v] (st, i, o, None)
+          let (st, i, o, Some v) = eval env conf e in
+          (st, i, o, Some (match v with
+            | Value.Array list -> Value.of_int @@ List.length list
+            | Value.String s -> Value.of_int @@ String.length s))
       and eval_list env conf xs =
         let vs, (st, i, o, _) =
           List.fold_left
@@ -280,7 +285,7 @@ module Stmt =
       | Assign (name, xs, e)   -> 
         let (st, i, o, is) = Expr.eval_list env conf xs in
         let (st, i, o, Some value) = Expr.eval env (st, i, o, None) e in
-        eval env (update st x v is, i, o, None) Skip k
+        eval env (update st name value is, i, o, None) Skip k
       | Seq    (s1, s2) -> eval env conf (seq s2 k) s1
       | Skip -> (match k with Skip -> conf | _ -> eval env conf Skip k)
       | If (cond, stm1, stm2) -> 
@@ -316,25 +321,27 @@ module Stmt =
       stmt:
         %"skip" {Skip}
       | %"if" e:!(Expr.parse)
-          %"then" the:parse
+	  %"then" the:parse 
           elif:(%"elif" !(Expr.parse) %"then" parse)*
-          els:(%"else" parse)?
+	  els:(%"else" parse)? 
         %"fi" {
-          If (e, the,
-              List.fold_right
-                (fun (e, t) elif -> If (e, t, elif)) 
-                elif
-                (match els with None -> Skip | Some s -> s)
+          If (e, the, 
+	         List.fold_right 
+		   (fun (e, t) elif -> If (e, t, elif)) 
+		   elif
+		   (match els with None -> Skip | Some s -> s)
           )
         }
       | %"while" e:!(Expr.parse) %"do" s:parse %"od"{While (e, s)}
       | %"for" i:parse "," c:!(Expr.parse) "," s:parse %"do" b:parse %"od" {
-          Seq (i, While (c, Seq (b, s)))
+	  Seq (i, While (c, Seq (b, s)))
         }
       | %"repeat" s:parse %"until" e:!(Expr.parse)  {Repeat (s, e)}
       | %"return" e:!(Expr.parse)?                  {Return e} 
-      | x:IDENT idx:(-"[" !(Expr.parse) -"]")* ":=" e:!(Expr.parse)    {Assign (x, idx, e)}
-      | name:IDENT "(" params:(!(Util.list)[ostap (!(Expr.parse))])? ")" {Call (name, default [] params)}
+      | x:IDENT 
+           s:(is:(-"[" !(Expr.parse) -"]")* ":=" e   :!(Expr.parse) {Assign (x, is, e)}    | 
+              "("  args:!(Util.list0)[Expr.parse] ")" {Call   (x, args)}
+             ) {s}
     )
       
   end
@@ -360,31 +367,31 @@ module Definition =
 (* The top-level definitions *)
 
 (* The top-level syntax category is a pair of definition list and statement (program body) *)
-type t = Definition.t list * Stmt.t
+type t = Definition.t list * Stmt.t    
 
 (* Top-level evaluator
      eval : t -> int list -> int list
    Takes a program and its input stream, and returns the output stream
 *)
 let eval (defs, body) i =
-  let module M = Map.Make (String) in
-  let m          = List.fold_left (fun m ((name, _) as def) -> M.add name def m) M.empty defs in  
-  let _, _, o, _ =
-    Stmt.eval
-      (object
-         method definition env f args ((st, i, o, r) as conf) =
-           try
-             let xs, locs, s      =  snd @@ M.find f m in
-             let st'              = List.fold_left (fun st (x, a) -> State.update x a st) (State.enter st (xs @ locs)) (List.combine xs args) in
-             let st'', i', o', r' = Stmt.eval env (st', i, o, r) Stmt.Skip s in
-             (State.leave st'' st, i', o', r')
-           with Not_found -> Builtin.eval conf args f
-       end)
-      (State.empty, i, [], None)
-      Stmt.Skip
-      body
-  in
-  o
+   let module M = Map.Make (String) in
+   let m          = List.fold_left (fun m ((name, _) as def) -> M.add name def m) M.empty defs in  
+   let _, _, o, _ =
+     Stmt.eval
+       (object
+          method definition env f args ((st, i, o, r) as conf) =
+            try
+              let xs, locs, s      =  snd @@ M.find f m in
+              let st'              = List.fold_left (fun st (x, a) -> State.update x a st) (State.enter st (xs @ locs)) (List.combine xs args) in
+              let st'', i', o', r' = Stmt.eval env (st', i, o, r) Stmt.Skip s in
+              (State.leave st'' st, i', o', r')
+            with Not_found -> Builtin.eval conf args f
+        end)
+       (State.empty, i, [], None)
+       Stmt.Skip
+       body
+   in
+   o
 
 (* Top-level parser *)
 let parse = ostap (!(Definition.parse)* !(Stmt.parse))
