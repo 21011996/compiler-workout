@@ -61,7 +61,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
               | [] -> conf)
 | insn :: prg' ->
   let new_config = match insn with
-      | BINOP op -> let y::x::stack' = stack in (cstack, Value.of_int @@ Expr.to_func_renamed op (Value.to_int x) (Value.to_int y) :: stack', c)
+      | BINOP op -> let y::x::stack' = stack in (cstack, Value.of_int (Expr.to_func op (Value.to_int x) (Value.to_int y)) :: stack', c)
       (*| READ     -> let z::i'        = i     in (cstack, z::stack, (st, i', o))
       | WRITE    -> let z::stack'    = stack in (cstack, stack', (st, i, o @ [z]))*)
       | CONST i  -> (cstack, (Value.of_int i)::stack, c)
@@ -128,15 +128,15 @@ let compile (defs, p) =
   | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
   | Expr.Call (f, params) -> List.concat (List.map expr params) @ [CALL (f, List.length params, false)]
   | Expr.String s -> [STRING s]
-  | Expr.Array xs ->  List.flatten (List.map expr xs) @ [CALL ("$array"), List.length xs, false]
+  | Expr.Array xs ->  List.flatten (List.map expr xs) @ [CALL ("$array", List.length xs, false)]
   | Expr.Elem (a, i) -> expr a @ expr i @ [CALL ("$elem", 2, false)]
-  | Expr.Length ->  expr e @ [CALL ("$length", 1, false)]
+  | Expr.Length e ->  expr e @ [CALL ("$length", 1, false)]
   in
   let rec compile_stm count = function  
   (*| Stmt.Read x ->  (count, [READ; ST x])
   | Stmt.Write e -> (count, expr e @ [WRITE])*)
   | Stmt.Assign (x, [], e) -> (count, expr e @ [ST x])
-  | Stmt.Assign (x, is, e) -> (count, List.concat (List.map exr is) @ expr e @ [STA (x, List.length is)])
+  | Stmt.Assign (x, is, e) -> (count, List.concat (List.map expr is) @ expr e @ [STA (x, List.length is)])
   | Stmt.Skip -> (count, [])
   | Stmt.Seq (st1, st2) -> 
       let (c1, prg1) = compile_stm count st1 in

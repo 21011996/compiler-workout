@@ -154,9 +154,9 @@ let rec compile env code = match code with
         | CONST value ->
           let s, env_new = env#allocate in
           env_new, [Mov (L value, s)]
-        | WRITE ->
+        (*| WRITE ->
           let s, env_new = env#pop in
-          env_new, [Push s; Call "Lwrite"; Pop eax]
+          env_new, [Push s; Call "Lwrite"; Pop eax]*)
         | LD name ->
           let s, env_new = (env#global name)#allocate in
           let loc_name = env_new#loc name in
@@ -175,9 +175,9 @@ let rec compile env code = match code with
               | _ ->  [Mov (s, loc_name)]
           in
           env_new, cmds
-        | READ ->
+        (*| READ ->
           let s, env_new = env#allocate in
-          env_new, [Call "Lread"; Mov (eax, s)]
+          env_new, [Call "Lread"; Mov (eax, s)]*)
         | BINOP op ->
           let y, x, new_env = env#pop2 in
           let ret_val, new_env_2 = new_env#allocate in
