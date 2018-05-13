@@ -61,7 +61,7 @@ let rec eval env ((cstack, stack, ((st, i, o) as c)) as conf) = function
               | [] -> conf)
 | insn :: prg' ->
   let new_config = match insn with
-      | BINOP op -> let y::x::stack' = stack in (cstack, Value.of_int (Expr.to_func op (Value.to_int x) (Value.to_int y)) :: stack', c)
+      | BINOP op -> let y::x::stack' = stack in (cstack, Value.of_int (Expr.to_func_renamed op (Value.to_int x) (Value.to_int y)) :: stack', c)
       (*| READ     -> let z::i'        = i     in (cstack, z::stack, (st, i', o))
       | WRITE    -> let z::stack'    = stack in (cstack, stack', (st, i, o @ [z]))*)
       | CONST i  -> (cstack, (Value.of_int i)::stack, c)
