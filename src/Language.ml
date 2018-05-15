@@ -320,6 +320,22 @@ module Stmt =
           ) 
       in
       State.update x (match is with [] -> v | _ -> update (State.eval st x) v is) st
+
+    let make_bind x v s = match s with
+      | None   -> None
+      | Some s -> Some (State.bind x v s)
+
+    let rec match_patt patt v st =
+               match patt, v with
+               | Pattern.Ident  x    , v                               -> make_bind x v st
+               | Pattern.Wildcard    , _                               -> st
+               | Pattern.Sexp (t, ps), Value.Sexp (t', vs) when t = t' -> match_list ps vs st
+               | _                                                     -> None
+             and match_list ps vs s =
+               match ps, vs with
+               | [], []       -> s
+               | p::ps, v::vs -> match_list ps vs (match_patt p v s)
+               | _            -> None
     
     let rec eval env ((st, i, o, r) as conf) k stmt =
       let seq x = function Skip -> x | y -> Seq (x, y) in
@@ -348,6 +364,16 @@ module Stmt =
       | Return expr -> (match expr with None -> (st, i, o, None) | Some e ->  Expr.eval env conf e)
       | Call (name, args) -> eval env (Expr.eval env conf (Expr.Call (name, args))) k Skip
       | Leave ->  eval env (State.drop st, i, o, r) Skip k
+      | Case   (e, bs)     ->
+          let (_, _, _, Some v) as conf' = Expr.eval env conf e in
+          let rec branch ((st, i, o, _) as conf) = function
+          | [] -> eval env conf Skip k
+          | (patt, body)::tl ->
+             match match_patt patt v (Some State.undefined) with
+             | None     -> branch conf tl
+             | Some st' -> eval env (State.push st st' (Pattern.vars patt), i, o, None) k (Seq (body, Leave))
+         in
+         branch conf' bs
          
     (* Statement parser *)
     ostap (
