@@ -30,6 +30,10 @@ module Value =
     let of_string s = String s
     let of_array  a = Array  a
 
+    let tag_of = function
+    | Sexp (t, _) -> t
+    | _ -> failwith "symbolic expression expected"
+
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
 
     let rec list_init i n f = if i >= n then [] else (f i) :: (list_init (i + 1) n f) 
@@ -163,7 +167,7 @@ module Expr =
        which takes an environment (of the same type), a name of the function, a list of actual parameters and a configuration, 
        an returns a pair: the return value for the call and the resulting configuration
     *)                                                                                                 
-    let to_func_renamed op =
+    let to_func op =
       let bti   = function true -> 1 | _ -> 0 in
       let itb b = b <> 0 in
       let (|>) f g   = fun x y -> f (g x y) in
@@ -196,7 +200,7 @@ module Expr =
         | Binop (op, x, y) -> 
          let (_, _, _, Some x) as conf_x = eval env conf x in
          let (st, i, o, Some y) = eval env conf_x y in
-          (st, i, o, Some (Value.of_int @@ to_func_renamed op (Value.to_int x) (Value.to_int y)))
+          (st, i, o, Some (Value.of_int @@ to_func op (Value.to_int x) (Value.to_int y)))
         | Call (name, args) ->
           let (st, i, o, evaled_args) = eval_list env conf args in
           env#definition env name evaled_args (st, i, o, None)
